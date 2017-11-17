@@ -17,9 +17,7 @@ import scala.Tuple2;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 
 /** This LocalAssemblyHandler aligns assembly contigs with BWA, along with some optional writing of intermediate results. */
 public final class FermiLiteAssemblyHandler implements FindBreakpointEvidenceSpark.LocalAssemblyHandler {
@@ -40,7 +38,7 @@ public final class FermiLiteAssemblyHandler implements FindBreakpointEvidenceSpa
     @Override
     public AlignedAssemblyOrExcuse apply( final Tuple2<Integer, List<SVFastqUtils.FastqRead>> intervalAndReads ) {
         final int intervalID = intervalAndReads._1();
-        String assemblyName = AlignedAssemblyOrExcuse.formatAssemblyID(intervalID);
+        final String assemblyName = AlignedAssemblyOrExcuse.formatAssemblyID(intervalID);
         final List<SVFastqUtils.FastqRead> readsList = intervalAndReads._2();
 
         final int fastqSize = readsList.stream().mapToInt(FastqRead -> FastqRead.getBases().length).sum();
@@ -101,19 +99,20 @@ public final class FermiLiteAssemblyHandler implements FindBreakpointEvidenceSpa
                 os.write('\n');
             }
         }
-        catch ( IOException ioe ) {
-            throw new GATKException("Unable to write fasta file of contigs from assembly "+assemblyName, ioe);
+        catch ( final IOException ioe ) {
+            throw new GATKException("Unable to write fasta file of contigs from assembly " + assemblyName, ioe);
         }
 
         final String imageFile = String.format("%s/%s.img", tmpDir, assemblyName);
         BwaMemIndex.createIndexImageFromFastaFile(fastaFile, imageFile);
         try { BucketUtils.deleteFile(fastaFile); }
-        catch ( IOException ioe ) { throw new GATKException("unable to delete "+fastaFile, ioe); }
+        catch ( final IOException ioe ) { throw new GATKException("unable to delete " + fastaFile, ioe); }
         try ( final BwaMemIndex assemblyIndex = new BwaMemIndex(imageFile);
               final BwaMemAligner aligner = new BwaMemAligner(assemblyIndex) ) {
             aligner.alignPairs();
-            List<List<BwaMemAlignment>> alignments =
+            final List<List<BwaMemAlignment>> alignments =
                     aligner.alignSeqs(readsList, SVFastqUtils.FastqRead::getBases);
+            final Map<Link, Integer> linkCounts = new HashMap<>();
             final int nReads = readsList.size();
             for ( int idx = 0; idx < nReads; idx += 2 ) {
                 final List<BwaMemAlignment> alignList1 = alignments.get(idx);
@@ -121,17 +120,57 @@ public final class FermiLiteAssemblyHandler implements FindBreakpointEvidenceSpa
                 for ( final BwaMemAlignment alignment1 : alignList1 ) {
                     for ( final BwaMemAlignment alignment2 : alignList2 ) {
                         if ( alignment1.getRefId() != alignment2.getRefId() ) {
-                            new Link(alignment1.getRefId(),
-                                    SAMFlag.READ_REVERSE_STRAND.isSet(alignment1.getSamFlag()),
-                                    alignment2.getRefId(),
-                                    !SAMFlag.READ_REVERSE_STRAND.isSet(alignment2.getSamFlag()));
+                            final Link link = new Link(alignment1.getRefId(),
+                                                        SAMFlag.READ_REVERSE_STRAND.isSet(alignment1.getSamFlag()),
+                                                        alignment2.getRefId(),
+                                                        !SAMFlag.READ_REVERSE_STRAND.isSet(alignment2.getSamFlag()));
+                            linkCounts.merge(link, 1, Integer::sum);
                         }
                     }
                 }
             }
         }
         try { BucketUtils.deleteFile(imageFile); }
-        catch ( IOException ioe ) { throw new GATKException("unable to delete "+imageFile, ioe); }
+        catch ( final IOException ioe ) { throw new GATKException("unable to delete " + imageFile, ioe); }
         return result;
+    }
+
+    private static final class Link {
+        private final int contigID1;
+        private final boolean isRC1;
+        private final int contigID2;
+        private final boolean isRC2;
+
+        public Link( final int contigID1, boolean isRC1, final int contigID2, boolean isRC2 ) {
+            if ( contigID1 < contigID2 ) {
+                this.contigID1 = contigID1;
+                this.isRC1 = isRC1;
+                this.contigID2 = contigID2;
+                this.isRC2 = isRC2;
+            } else {
+                this.contigID1 = contigID2;
+                this.isRC1 = !isRC2;
+                this.contigID2 = contigID1;
+                this.isRC2 = !isRC1;
+            }
+        }
+
+        @Override public boolean equals( final Object obj ) {
+            return obj instanceof Link && equals((Link)obj);
+        }
+
+        public boolean equals( final Link link ) {
+            return this == link ||
+                    (contigID1 == link.contigID1 && isRC1 == link.isRC1 &&
+                     contigID2 == link.contigID2 && isRC2 == link.isRC2);
+        }
+
+        @Override public int hashCode() {
+            int hashVal = 113;
+            hashVal = 47 * (hashVal + contigID1);
+            hashVal = 47 * (hashVal + (isRC1 ? 0 : 1));
+            hashVal = 47 * (hashVal + contigID2);
+            return 47 * (hashVal + (isRC2 ? 0 : 1));
+        }
     }
 }
