@@ -10,7 +10,7 @@ import org.broadinstitute.hellbender.tools.copynumber.models.AlleleFractionParam
 import org.broadinstitute.hellbender.tools.copynumber.models.CopyRatioParameter;
 import org.broadinstitute.hellbender.tools.copynumber.models.MultidimensionalModellerUnitTest;
 import org.broadinstitute.hellbender.tools.copynumber.segmentation.MultidimensionalKernelSegmenterUnitTest;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -36,8 +36,6 @@ public final class ModelSegmentsIntegrationTest extends CommandLineProgramTest {
             "model-segments-wes-tumor-denoised-copy-ratios-with-sample-name-mismatch.denoisedCR.tsv");
     private static final File NORMAL_ALLELIC_COUNTS_FILE_WITH_MISSING_SITES = new File(TEST_SUB_DIR,
             "model-segments-wes-normal-allelic-counts-with-missing-sites.allelicCounts.tsv");
-    private static final File NORMAL_ALLELIC_COUNTS_FILE_WITH_SEQUENCE_DICTIONARY_MISMATCH = new File(TEST_SUB_DIR,
-            "model-segments-wes-normal-allelic-counts-with-sequence-dictionary-mismatch.allelicCounts.tsv");
 
     private static final SampleLocatableMetadata EXPECTED_METADATA = new CopyRatioCollection(TUMOR_DENOISED_COPY_RATIOS_FILE).getMetadata();
 
@@ -128,6 +126,13 @@ public final class ModelSegmentsIntegrationTest extends CommandLineProgramTest {
                 outputPrefix + ModelSegments.COPY_RATIO_SEGMENTS_FOR_CALLER_FILE_SUFFIX));
         Assert.assertEquals(EXPECTED_METADATA, copyRatioSegments.getMetadata());
 
+        final File copyRatioLegacySegmentsFile = new File(outputDir,
+                outputPrefix + ModelSegments.COPY_RATIO_LEGACY_SEGMENTS_FILE_SUFFIX);
+        Assert.assertTrue(copyRatioLegacySegmentsFile.exists());
+        final File alleleFractionLegacySegmentsFile = new File(outputDir,
+                outputPrefix + ModelSegments.ALLELE_FRACTION_LEGACY_SEGMENTS_FILE_SUFFIX);
+        Assert.assertTrue(alleleFractionLegacySegmentsFile.exists());
+
         AllelicCountCollection hetAllelicCounts = null;
         AllelicCountCollection hetNormalAllelicCounts = null;
         if (isAllelicCountsPresent) {
@@ -165,18 +170,6 @@ public final class ModelSegmentsIntegrationTest extends CommandLineProgramTest {
         final ArgumentsBuilder argsBuilder = new ArgumentsBuilder()
                 .addArgument(CopyNumberStandardArgument.ALLELIC_COUNTS_FILE_LONG_NAME, TUMOR_ALLELIC_COUNTS_FILE.getAbsolutePath())
                 .addArgument(CopyNumberStandardArgument.NORMAL_ALLELIC_COUNTS_FILE_LONG_NAME, NORMAL_ALLELIC_COUNTS_FILE_WITH_MISSING_SITES.getAbsolutePath())
-                .addOutput(outputDir)
-                .addArgument(CopyNumberStandardArgument.OUTPUT_PREFIX_LONG_NAME, outputPrefix);
-        runCommandLine(argsBuilder);
-    }
-
-    @Test(expectedExceptions = IllegalArgumentException.class)
-    public void testSequenceDictionaryMismatch() {
-        final File outputDir = createTempDir("testDir");
-        final String outputPrefix = "test";
-        final ArgumentsBuilder argsBuilder = new ArgumentsBuilder()
-                .addArgument(CopyNumberStandardArgument.ALLELIC_COUNTS_FILE_LONG_NAME, TUMOR_ALLELIC_COUNTS_FILE.getAbsolutePath())
-                .addArgument(CopyNumberStandardArgument.NORMAL_ALLELIC_COUNTS_FILE_LONG_NAME, NORMAL_ALLELIC_COUNTS_FILE_WITH_SEQUENCE_DICTIONARY_MISMATCH.getAbsolutePath())
                 .addOutput(outputDir)
                 .addArgument(CopyNumberStandardArgument.OUTPUT_PREFIX_LONG_NAME, outputPrefix);
         runCommandLine(argsBuilder);

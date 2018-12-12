@@ -1,8 +1,11 @@
 # Imports
 import os
+import math
 import h5py
 import numpy as np
 from collections import Counter, defaultdict, namedtuple
+
+from gatktool import tool
 
 # Keras Imports
 import keras.backend as K
@@ -19,10 +22,18 @@ CIGAR_CODES_TO_COUNT = [
     defines.CIGAR_CODE['M'], defines.CIGAR_CODE['I'], defines.CIGAR_CODE['S'], defines.CIGAR_CODE['D']
 ]
 
+p_lut = np.zeros((256,))
+not_p_lut = np.zeros((256,))
+
+for i in range(256):
+    exponent = float(-i) / 10.0
+    p_lut[i] = 1.0 - (10.0**exponent)
+    not_p_lut[i] = (1.0 - p_lut[i]) / 3.0
+
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 # ~~~~~~~ Inference ~~~~~~~~~~~~~~~
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-def score_and_write_batch(args, model, file_out, fifo, batch_size, python_batch_size, tensor_dir):
+def score_and_write_batch(args, model, file_out, batch_size, python_batch_size, tensor_dir):
     '''Score a batch of variants with a CNN model. Write tab delimited temp file with scores.
 
     This function is tightly coupled with the CNNScoreVariants.java
@@ -42,15 +53,14 @@ def score_and_write_batch(args, model, file_out, fifo, batch_size, python_batch_
     variant_types = []
     variant_data = []
     read_batch = []
-
-    for i in range(batch_size):
-        fifo_line = fifo.readline()
+    for _ in range(batch_size):
+        fifo_line = tool.readDataFIFO()
         fifo_data = fifo_line.split(defines.SEPARATOR_CHAR)
 
         variant_data.append(fifo_data[0] + '\t' + fifo_data[1] + '\t' + fifo_data[2] + '\t' + fifo_data[3])
         reference_batch.append(reference_string_to_tensor(fifo_data[4]))
         annotation_batch.append(annotation_string_to_tensor(args, fifo_data[5]))
-        variant_types.append(fifo_data[6])
+        variant_types.append(fifo_data[6].strip())
 
         fidx = 7 # 7 Because above we parsed: contig pos ref alt reference_string annotation variant_type
         if args.tensor_name in defines.TENSOR_MAPS_2D and len(fifo_data) > fidx:
@@ -58,7 +68,7 @@ def score_and_write_batch(args, model, file_out, fifo, batch_size, python_batch_
             var = Variant(fifo_data[0], int(fifo_data[1]), fifo_data[2], fifo_data[3], fifo_data[6])
             while fidx+7 < len(fifo_data):
                 read_tuples.append( Read(fifo_data[fidx],
-                                         [int(q) for q in fifo_data[fidx+1].split(',')],
+                                         list(map(int, fifo_data[fidx+1].split(','))),
                                          fifo_data[fidx+2],
                                          bool_from_java(fifo_data[fidx+3]),
                                          bool_from_java(fifo_data[fidx+4]),
@@ -69,7 +79,7 @@ def score_and_write_batch(args, model, file_out, fifo, batch_size, python_batch_
             _, ref_start, _ = get_variant_window(args, var)
             insert_dict = get_inserts(args, read_tuples, var)
             tensor = read_tuples_to_read_tensor(args, read_tuples, ref_start, insert_dict)
-            reference_sequence_into_tensor(args, fifo_data[4], tensor)
+            reference_sequence_into_tensor(args, fifo_data[4], tensor, insert_dict)
             if os.path.exists(tensor_dir):
                 _write_tensor_to_hd5(args, tensor, annotation_batch[-1], fifo_data[0], fifo_data[1], fifo_data[6])
             read_batch.append(tensor)
@@ -103,9 +113,10 @@ def reference_string_to_tensor(reference):
             dna_data[i, defines.DNA_SYMBOLS[b]] = 1.0
         elif b in defines.AMBIGUITY_CODES:
             dna_data[i] = defines.AMBIGUITY_CODES[b]
+        elif b == '\x00':
+            break
         else:
             raise ValueError('Error! Unknown code:', b)
-
     return dna_data
 
 
@@ -114,9 +125,8 @@ def annotation_string_to_tensor(args, annotation_string):
     name_val_arrays = [p.split('=') for p in name_val_pairs]
     annotation_map = {str(p[0]).strip() : p[1] for p in name_val_arrays if len(p) > 1}
     annotation_data = np.zeros(( len(defines.ANNOTATIONS[args.annotation_set]),))
-
     for i,a in enumerate(defines.ANNOTATIONS[args.annotation_set]):
-        if a in annotation_map:
+        if a in annotation_map and not math.isnan(float(annotation_map[a])):
             annotation_data[i] = annotation_map[a]
 
     return annotation_data
@@ -201,8 +211,8 @@ def cigar_string_to_tuples(cigar):
 
 def get_variant_window(args, variant):
     index_offset = (args.window_size//2)
-    reference_start = variant.pos-(index_offset+1)
-    reference_end = variant.pos+index_offset
+    reference_start = variant.pos-index_offset
+    reference_end = variant.pos + index_offset + (args.window_size%2)
     return index_offset, reference_start, reference_end
 
 
@@ -245,6 +255,7 @@ def read_tuples_to_read_tensor(args, read_tuples, ref_start, insert_dict):
 
             if i == args.window_size:
                 break
+
             if b == defines.SKIP_CHAR:
                 continue
             elif flag_start == -1:
@@ -290,8 +301,6 @@ def read_tuples_to_read_tensor(args, read_tuples, ref_start, insert_dict):
             else:
                 tensor[channel_map['mapping_quality'], j, flag_start:flag_end] = mq
 
-
-
     return tensor
 
 
@@ -335,8 +344,14 @@ def sequence_and_qualities_from_read(args, read, ref_start, insert_dict):
     return rseq, rqual
 
 
-def reference_sequence_into_tensor(args, reference_seq, tensor):
+def reference_sequence_into_tensor(args, reference_seq, tensor, insert_dict):
     ref_offset = len(set(args.input_symbols.values()))
+
+    for i in sorted(insert_dict.keys(), key=int, reverse=True):
+        if i < 0:
+            reference_seq = defines.INDEL_CHAR*insert_dict[i] + reference_seq
+        else:
+            reference_seq = reference_seq[:i] + defines.INDEL_CHAR*insert_dict[i] + reference_seq[i:]
 
     for i,b in enumerate(reference_seq):
         if i == args.window_size:
@@ -372,18 +387,9 @@ def base_quality_to_phred_array(base_quality, base, base_dict):
 
 
 def base_quality_to_p_hot_array(base_quality, base, base_dict):
-    phot = np.zeros((4,))
-    exponent = float(-base_quality) / 10.0
-    p = 1.0-(10.0**exponent)
-    not_p = (1.0-p)/3.0
-
-    for b in base_dict.keys():
-        if b == base:
-            phot[base_dict[b]] = p
-        elif b == defines.INDEL_CHAR:
-            continue
-        else:
-            phot[base_dict[b]] = not_p
+    not_p = not_p_lut[base_quality]
+    phot = [not_p, not_p, not_p, not_p]
+    phot[base_dict[base]] = p_lut[base_quality]
 
     return phot
 
@@ -426,3 +432,14 @@ def _write_tensor_to_hd5(args, tensor, annotations, contig, pos, variant_type):
     with h5py.File(tensor_path, 'w') as hf:
         hf.create_dataset(args.tensor_name, data=tensor, compression='gzip')
         hf.create_dataset(args.annotation_set, data=annotations, compression='gzip')
+
+def clear_session():
+    try:
+        K.clear_session()
+        K.get_session().close()
+        cfg = K.tf.ConfigProto()
+        cfg.gpu_options.allow_growth = True
+        K.set_session(K.tf.Session(config=cfg))
+    except AttributeError as e:
+        print('Could not clear session. Maybe you are using Theano backend?')
+

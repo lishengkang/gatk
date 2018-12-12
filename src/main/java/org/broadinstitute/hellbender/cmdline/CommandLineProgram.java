@@ -1,5 +1,7 @@
 package org.broadinstitute.hellbender.cmdline;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Strings;
 import com.intel.gkl.compression.IntelDeflaterFactory;
 import com.intel.gkl.compression.IntelInflaterFactory;
 import htsjdk.samtools.Defaults;
@@ -9,29 +11,27 @@ import htsjdk.samtools.metrics.MetricsFile;
 import htsjdk.samtools.metrics.StringHeader;
 import htsjdk.samtools.util.BlockCompressedOutputStream;
 import htsjdk.samtools.util.BlockGunzipper;
-import htsjdk.samtools.util.IOUtil;
 import htsjdk.samtools.util.Log;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.barclay.argparser.*;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.LoggingUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.config.ConfigFactory;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.URL;
+import java.nio.file.*;
 import java.text.DecimalFormat;
 import java.time.Duration;
 import java.time.ZonedDateTime;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 import java.util.stream.Collectors;
@@ -59,8 +59,10 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
     // abstract, this is fine (as long as no logging has to happen statically in this class).
     protected final Logger logger = LogManager.getLogger(this.getClass());
 
-    @Argument(fullName = StandardArgumentDefinitions.TMP_DIR_NAME, common=true, optional=true)
-    public List<File> TMP_DIR = new ArrayList<>();
+    private static final String DEFAULT_TOOLKIT_SHORT_NAME = "GATK";
+
+    @Argument(fullName = StandardArgumentDefinitions.TMP_DIR_NAME, common=true, optional=true, doc = "Temp directory to use.")
+    public String tmpDir;
 
     @ArgumentCollection(doc="Special Arguments that have meaning to the argument parsing system.  " +
             "It is unlikely these will ever need to be accessed by the command line program")
@@ -80,6 +82,9 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
 
     @Argument(fullName = StandardArgumentDefinitions.NIO_MAX_REOPENS_LONG_NAME, shortName = StandardArgumentDefinitions.NIO_MAX_REOPENS_SHORT_NAME, doc = "If the GCS bucket channel errors out, how many times it will attempt to re-initiate the connection", optional = true)
     public int NIO_MAX_REOPENS = ConfigFactory.getInstance().getGATKConfig().gcsMaxRetries();
+
+    @Argument(fullName = StandardArgumentDefinitions.NIO_PROJECT_FOR_REQUESTER_PAYS_LONG_NAME, doc = "Project to bill when accessing \"requester pays\" buckets. If unset, these buckets cannot be accessed.", optional = true)
+    public String NIO_PROJECT_FOR_REQUESTER_PAYS = ConfigFactory.getInstance().getGATKConfig().gcsProjectForRequesterPays();
 
     // This option is here for documentation completeness.
     // This is actually parsed out in Main to initialize configuration files because
@@ -140,8 +145,10 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
 
     public Object instanceMainPostParseArgs() {
         // Provide one temp directory if the caller didn't
-        if (this.TMP_DIR == null) this.TMP_DIR = new ArrayList<>();
-        if (this.TMP_DIR.isEmpty()) TMP_DIR.add(IOUtil.getDefaultTmpDir());
+        // TODO - this should use the HTSJDK IOUtil.getDefaultTmpDirPath, which is somehow broken in the current HTSJDK version
+        if (tmpDir == null || tmpDir.isEmpty()) {
+            tmpDir = IOUtils.getAbsolutePathWithoutFileProtocol(IOUtils.getPath(System.getProperty("java.io.tmpdir")));
+        }
 
         // Build the default headers
         final ZonedDateTime startDateTime = ZonedDateTime.now();
@@ -150,13 +157,19 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
 
         LoggingUtils.setLoggingLevel(VERBOSITY);  // propagate the VERBOSITY level to logging frameworks
 
-        for (final File f : TMP_DIR) {
-            // Intentionally not checking the return values, because it may be that the program does not
-            // need a tmp_dir. If this fails, the problem will be discovered downstream.
-            if (!f.exists()) f.mkdirs();
-            f.setReadable(true, false);
-            f.setWritable(true, false);
-            System.setProperty("java.io.tmpdir", f.getAbsolutePath()); // in loop so that last one takes effect
+        // set the temp directory as a java property, checking for existence and read/write access
+        final Path p = IOUtils.getPath(tmpDir);
+        try {
+            p.getFileSystem().provider().checkAccess(p, AccessMode.READ, AccessMode.WRITE);
+            System.setProperty("java.io.tmpdir", IOUtils.getAbsolutePathWithoutFileProtocol(p));
+        } catch (final AccessDeniedException | NoSuchFileException e) {
+            // TODO: it may be that the program does not need a tmp dir
+            // TODO: if it fails, the problem can be discovered downstream
+            // TODO: should log a warning instead?
+            throw new UserException.BadTempDir(p, "should exist and have read/write access", e);
+        } catch (final IOException e) {
+            // other exceptions with the tmp directory
+            throw new UserException.BadTempDir(p, e.getMessage(), e);
         }
 
         //Set defaults (note: setting them here means they are not controllable by the user)
@@ -167,7 +180,7 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
             BlockGunzipper.setDefaultInflaterFactory(new IntelInflaterFactory());
         }
 
-        BucketUtils.setGlobalNIODefaultOptions(NIO_MAX_REOPENS);
+        BucketUtils.setGlobalNIODefaultOptions(NIO_MAX_REOPENS, NIO_PROJECT_FOR_REQUESTER_PAYS);
 
         if (!QUIET) {
             printStartupMessage(startDateTime);
@@ -345,6 +358,15 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
     }
 
     /**
+     * @return An abbreviated name of the toolkit for this tool. Subclasses may override to provide
+     *         a custom toolkit name.
+     */
+    protected String getToolkitShortName() {
+        // TODO: stored in the jar manifest, like {@link CommandLineProgram#getToolkitName}
+        return DEFAULT_TOOLKIT_SHORT_NAME;
+    }
+
+    /**
      * @return the version of this tool. It is the version stored in the manifest of the jarfile
      *          by default, or "Unavailable" if that's not available.
      *
@@ -417,8 +439,12 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
         final boolean usingIntelInflater = (BlockGunzipper.getDefaultInflaterFactory() instanceof IntelInflaterFactory && ((IntelInflaterFactory)BlockGunzipper.getDefaultInflaterFactory()).usingIntelInflater());
         logger.info("Inflater: " + (usingIntelInflater ? "IntelInflater": "JdkInflater"));
 
-        logger.info("GCS max retries/reopens: " + BucketUtils.getCloudStorageConfiguration(NIO_MAX_REOPENS).maxChannelReopens());
-        logger.info("Using google-cloud-java patch 6d11bef1c81f885c26b2b56c8616b7a705171e4f from https://github.com/droazen/google-cloud-java/tree/dr_all_nio_fixes");
+        logger.info("GCS max retries/reopens: " + BucketUtils.getCloudStorageConfiguration(NIO_MAX_REOPENS, "").maxChannelReopens());
+        if (Strings.isNullOrEmpty(NIO_PROJECT_FOR_REQUESTER_PAYS)) {
+            logger.info("Requester pays: disabled");
+        } else {
+            logger.info("Requester pays: enabled. Billed to: " + NIO_PROJECT_FOR_REQUESTER_PAYS);
+        }
     }
 
     /**
@@ -456,7 +482,8 @@ public abstract class CommandLineProgram implements CommandLinePluginProvider {
     /**
      * @return this programs CommandLineParser.  If one is not initialized yet this will initialize it.
      */
-    protected final CommandLineParser getCommandLineParser() {
+    @VisibleForTesting
+    public final CommandLineParser getCommandLineParser() {
         if( commandLineParser == null) {
             commandLineParser = new CommandLineArgumentParser(this, getPluginDescriptors(), Collections.emptySet());
         }

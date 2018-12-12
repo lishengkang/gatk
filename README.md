@@ -1,6 +1,6 @@
 [![Build Status](https://travis-ci.org/broadinstitute/gatk.svg?branch=master)](https://travis-ci.org/broadinstitute/gatk)
 [![codecov](https://codecov.io/gh/broadinstitute/gatk/branch/master/graph/badge.svg)](https://codecov.io/gh/broadinstitute/gatk)
-[![Maven Central](https://maven-badges.herokuapp.com/maven-central/org.broadinstitute/gatk/badge.svg)](https://maven-badges.herokuapp.com/maven-central/org.broadinstitute/gatk)
+[![Maven Central](https://img.shields.io/maven-central/v/org.broadinstitute/gatk.svg)](https://maven-badges.herokuapp.com/maven-central/org.broadinstitute/gatk)
 [![License (3-Clause BSD)](https://img.shields.io/badge/license-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 
 ***Please see the [GATK website](http://www.broadinstitute.org/gatk), where you can download a precompiled executable, read documentation, ask questions, and receive technical support.***
@@ -27,7 +27,6 @@ releases of the toolkit.
     * [Running GATK4 with inputs on Google Cloud Storage](#gcs)
     * [Running GATK4 Spark tools on a Spark cluster](#sparkcluster)
     * [Running GATK4 Spark tools on Google Cloud Dataproc](#dataproc)
-    * [Note on 2bit Reference](#2bit)
     * [Using R to generate plots](#R)
     * [GATK Tab Completion for Bash](#tab_completion)
 * [For GATK Developers](#developers)
@@ -54,17 +53,7 @@ releases of the toolkit.
     * Java 8
     * Python 2.6 or greater (required to run the `gatk` frontend script)
     * Python 3.6.2, along with a set of additional Python packages, is required to run some tools and workflows.
-      GATK uses the [Conda](https://conda.io/docs/index.html) package manager to establish and manage the
-      environment and dependencies required by these tools. The GATK Docker image comes with this environment
-      pre-configured. In order to establish an environment suitable to run these tools outside of the Docker image, the
-      conda [gatkcondaenv.yml](https://github.com/broadinstitute/gatk/blob/master/scripts/gatkcondaenv.yml) file is
-      provided. To establish the conda environment locally, [Conda](https://conda.io/docs/index.html) must first
-      be installed. Then, create the gatk environment by running the command ```conda env create -n gatk -f gatkcondaenv.yml```
-      (developers should run ```./gradlew createPythonPackageArchive```, followed by
-      ```conda env create -n gatk -f scripts/gatkcondaenv.yml``` from within the root of the repository clone).
-      To activate the environment once it has been created, run the command ```source activate gatk```. See the
-      [Conda](https://conda.io/docs/user-guide/tasks/manage-environments.html) documentation for
-      additional information about using and managing Conda environments.
+      See [Python Dependencies](#python) for more information.
     * R 3.2.5 (needed for producing plots in certain tools)
 * To build GATK:
     * A Java 8 JDK
@@ -82,6 +71,28 @@ releases of the toolkit.
 * Pre-packaged Docker images with all needed dependencies installed can be found on
   [our dockerhub repository](https://hub.docker.com/r/broadinstitute/gatk/). This requires a recent version of the
    docker client, which can be found on the [docker website](https://www.docker.com/get-docker).
+* Python Dependencies:<a name="python"></a>
+    * GATK4 uses the [Conda](https://conda.io/docs/index.html) package manager to establish and manage the
+      Python environment and dependencies required by GATK tools that have a Python dependency. The ```gatk``` environment, 
+      requires hardware with AVX support for tools that depend on TensorFlow (e.g. CNNScoreVariant). The GATK Docker image 
+      comes with the ```gatk``` environment pre-configured.
+    * To establish the  environment when not using the Docker image, a conda environment must first be "created", and
+      then "activated":
+        * First, make sure [Miniconda or Conda](https://conda.io/docs/index.html) is installed (Miniconda is sufficient).
+        * To "create" the conda environment:
+            * If running from a zip or tar distribution, run the command ```conda env create -f gatkcondaenv.yml``` to
+              create the ```gatk``` environment, or the command ```conda env create -f gatkcondaenv.intel.yml``` to create
+              the ```gatk-intl``` environment.
+            * If running from a cloned repository, run ```./gradlew localDevCondaEnv```. This generates the Python
+              package archive and conda yml dependency file(s) in the build directory, and also creates (or updates)
+              the local  ```gatk``` conda environment. (To create the ```gatk-intel``` conda environment once the files
+              have been generated, run the command ```conda env create -f gatkcondaenv.intel.yml```).
+        * To "activate" the conda environment (the conda environment must be activated within the same shell from which
+          GATK is run):
+             * Execute the shell command ```source activate gatk``` to activate the ```gatk``` environment, or
+               ```source activate gatk-intel``` to activate the ```gatk-intel``` environment.
+        * See the [Conda](https://conda.io/docs/user-guide/tasks/manage-environments.html) documentation for
+          additional information about using and managing Conda environments.
 
 ## <a name="quickstart">Quick Start Guide</a>
 
@@ -259,7 +270,7 @@ You can download and run pre-built versions of GATK4 from the following places:
 
   * Examples:
 
-      ```
+      ```      
       ./gatk PrintReadsSpark \
           -I gs://my-gcs-bucket/path/to/input.bam \
           -O gs://my-gcs-bucket/path/to/output.bam \
@@ -276,14 +287,16 @@ You can download and run pre-built versions of GATK4 from the following places:
           --num-executors 5 --executor-cores 2 --executor-memory 4g \
           --conf spark.yarn.executor.memoryOverhead=600
       ```
-  * When using Dataproc you can access the web interfaces for YARN, Hadoop and HDFS. Follow [these instructions](https://cloud.google.com/dataproc/cluster-web-interfaces) to create an SSH tunnel and connect with your browser.
+  * When using Dataproc you can access the web interfaces for YARN, Hadoop and HDFS by opening an SSH tunnel and connecting with your browser.  This can be done easily using included `gcs-cluster-ui` script.
+  
+    ```
+    scripts/dataproc-cluster-ui myGCSCluster
+    ```
+    Or see these [these instructions](https://cloud.google.com/dataproc/cluster-web-interfaces) for more details.
   * Note that the spark-specific arguments are separated from the tool-specific arguments by a `--`.
   * If you want to avoid uploading the GATK jar to GCS on every run, set the `GATK_GCS_STAGING`
     environment variable to a bucket you have write access to (eg., `export GATK_GCS_STAGING=gs://<my_bucket>/`)
   * Dataproc Spark clusters are configured with [dynamic allocation](https://spark.apache.org/docs/latest/job-scheduling.html#dynamic-resource-allocation) so you can omit the "--num-executors" argument and let YARN handle it automatically.
-
-#### <a name="2bit">Note on 2bit Reference</a>
-* Note: Some GATK Spark tools by default require the reference file to be in 2bit format (notably `BaseRecalibratorSpark`,`BQSRPipelineSpark` and `ReadsPipelineSpark`). You can convert your fasta to 2bit by using the `faToTwoBit` utility from [UCSC](http://hgdownload.soe.ucsc.edu/admin/exe/) - see also the [documentation for `faToTwoBit`](https://genome.ucsc.edu/goldenpath/help/blatSpec.html#faToTwoBitUsage).
 
 #### <a name="R">Using R to generate plots</a>
 Certain GATK tools may optionally generate plots if R is installed.  We recommend **R v3.2.5** if you want to produce plots.  If you are uninterested in plotting, R is still required by several of the unit tests.  Plotting is currently untested and should be viewed as a convenience rather than a primary output.
@@ -292,7 +305,6 @@ R installation is not part of the gradle build.  See http://cran.r-project.org/ 
 * for ubuntu see these [ubuntu specific instructions](http://cran.r-project.org/bin/linux/ubuntu/README)
 * for OSX we recommend installation through [homebrew](http://brew.sh/)
 ```
-brew tap homebrew/science
 brew install R
 ```
 
@@ -362,7 +374,7 @@ echo "source <PATH_TO>/gatk-completion.sh" >> ~/.bashrc
 
 * For logging, use [org.apache.logging.log4j.Logger](https://logging.apache.org/log4j/2.0/log4j-api/apidocs/org/apache/logging/log4j/Logger.html)
 
-* We mostly follow the [Google Java Style guide](http://google-styleguide.googlecode.com/svn/trunk/javaguide.html)
+* We mostly follow the [Google Java Style guide](https://google.github.io/styleguide/javaguide.html)
 
 * Git: Don't push directly to master - make a pull request instead. 
 
@@ -378,7 +390,7 @@ echo "source <PATH_TO>/gatk-completion.sh" >> ~/.bashrc
     * Test report is in `build/reports/tests/test/index.html`.
     * What will happen depends on the value of the `TEST_TYPE` environment variable: 
        * unset or any other value         : run non-cloud unit and integration tests, this is the default
-       * `cloud`, `unit`, `integration`, `spark`   : run only the cloud, unit, integration, or Spark tests
+       * `cloud`, `unit`, `integration`, `spark`, `python`   : run only the cloud, unit, integration, python, or Spark tests
        * `all`                            : run the entire test suite
     * Cloud tests require being logged into `gcloud` and authenticated with a project that has access
       to the cloud test data.  They also require setting several certain environment variables.
@@ -589,7 +601,7 @@ We tend to do fairly close readings of pull requests, and you may get a lot of c
 * Use braces for control constructs, `if`, `for` etc.
 * Make classes, variables, parameters etc `final` unless there is a strong reason not to.
 * Give your operators some room. Not `a+b` but `a + b` and not `foo(int a,int b)` but `foo(int a, int b)`.
-* Generally speaking, stick to the [Google Java Style guide](http://google-styleguide.googlecode.com/svn/trunk/javaguide.html)
+* Generally speaking, stick to the [Google Java Style guide](https://google.github.io/styleguide/javaguide.html)
 
 Thank you for getting involved!
 

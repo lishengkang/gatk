@@ -17,10 +17,25 @@ final class CpxVariantType extends SvType {
         return CPX_SV_SYB_ALT_ALLELE_STR;
     }
 
-    CpxVariantType(final SimpleInterval affectedRefRegion, final Map<String, String> typeSpecificExtraAttributes) {
-        super(getIDString(affectedRefRegion),
-                Allele.create(SimpleSVType.createBracketedSymbAlleleString(CPX_SV_SYB_ALT_ALLELE_STR)),
-                affectedRefRegion.size(), typeSpecificExtraAttributes);
+    CpxVariantType(final SimpleInterval affectedRefRegion, final byte[] refBases, final int altHaplotypeSequenceLength,
+                   final Map<String, Object> typeSpecificExtraAttributes) {
+        super(affectedRefRegion.getContig(),
+                affectedRefRegion.getStart(),
+                affectedRefRegion.getEnd(),
+                getIDString(affectedRefRegion), //id
+                Allele.create(refBases, true),
+                Allele.create(SimpleSVType.createBracketedSymbAlleleString(CPX_SV_SYB_ALT_ALLELE_STR)), // alt allele
+                altHaplotypeSequenceLength - affectedRefRegion.size(), // svlen
+                typeSpecificExtraAttributes);
+    }
+
+    @Override
+    public final boolean hasApplicableEnd() {
+        return true;
+    }
+    @Override
+    public final boolean hasApplicableLength() {
+        return true;
     }
 
     private static String getIDString(final SimpleInterval affectedRefRegion) {

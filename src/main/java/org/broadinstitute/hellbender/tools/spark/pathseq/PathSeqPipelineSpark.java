@@ -93,7 +93,7 @@ import java.util.List;
  * <h4>Local mode:</h4>
  *
  * <pre>
- * gatk PathSeqFilterSpark  \
+ * gatk PathSeqPipelineSpark  \
  *   --input input_reads.bam \
  *   --kmer-file host_kmers.bfi \
  *   --filter-bwa-image host_reference.img \
@@ -112,7 +112,7 @@ import java.util.List;
  * <h4>Spark cluster on Google Cloud DataProc with 6 16-core / 208GB memory worker nodes:</h4>
  *
  * <pre>
- * gatk PathSeqFilterSpark  \
+ * gatk PathSeqPipelineSpark  \
  *   --input gs://my-gcs-bucket/input_reads.bam \
  *   --kmer-file hdfs://my-cluster-m:8020//host_kmers.bfi \
  *   --filter-bwa-image /references/host_reference.img \
@@ -289,7 +289,7 @@ public class PathSeqPipelineSpark extends GATKSparkTool {
                 final int numPartitions = Math.max(1, (int) (numTotalReads / readsPerPartitionOutput));
                 final JavaRDD<GATKRead> readsFinalRepartitioned = readsFinal.coalesce(numPartitions, false);
                 ReadsSparkSink.writeReads(ctx, outputPath, null, readsFinalRepartitioned, header,
-                        shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE, numPartitions);
+                        shardedOutput ? ReadsWriteFormat.SHARDED : ReadsWriteFormat.SINGLE, numPartitions, shardedPartsDir);
             } catch (final IOException e) {
                 throw new UserException.CouldNotCreateOutputFile(outputPath, "writing failed", e);
             }

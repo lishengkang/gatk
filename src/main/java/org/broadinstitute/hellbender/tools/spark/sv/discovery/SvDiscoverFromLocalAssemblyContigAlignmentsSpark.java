@@ -4,6 +4,8 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.*;
 import htsjdk.samtools.util.SequenceUtil;
 import htsjdk.variant.variantcontext.VariantContext;
+import htsjdk.variant.variantcontext.VariantContextBuilder;
+import htsjdk.variant.vcf.VCFHeaderLine;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.spark.api.java.JavaRDD;
@@ -16,31 +18,38 @@ import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.StructuralVariantDiscoveryProgramGroup;
-import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
+import org.broadinstitute.hellbender.engine.filters.VariantFilter;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryPipelineSpark;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.*;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.*;
+import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.CpxVariantInterpreter;
+import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.SegmentedCpxVariantSimpleVariantExtractor;
+import org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.SimpleNovelAdjacencyInterpreter;
+import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVIntervalTree;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVUtils;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVVCFWriter;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import scala.Tuple2;
 
-import java.io.IOException;
 import java.io.Serializable;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection;
-import static org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection.GAPPED_ALIGNMENT_BREAK_DEFAULT_SENSITIVITY;
-import static org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.AssemblyContigAlignmentSignatureClassifier.RawTypes;
+import static org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsSparkArgumentCollection;
+import static org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsSparkArgumentCollection.GAPPED_ALIGNMENT_BREAK_DEFAULT_SENSITIVITY;
+import static org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AssemblyContigWithFineTunedAlignments.AlignmentSignatureBasicType.*;
+import static org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AssemblyContigWithFineTunedAlignments.ReasonForAlignmentClassificationFailure;
 
 /**
  * (Internal) Examines aligned contigs from local assemblies and calls structural variants or their breakpoints
@@ -99,22 +108,29 @@ public final class SvDiscoverFromLocalAssemblyContigAlignmentsSpark extends GATK
     private final Logger localLogger = LogManager.getLogger(SvDiscoverFromLocalAssemblyContigAlignmentsSpark.class);
 
     @ArgumentCollection
-    private DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection
+    private DiscoverVariantsFromContigAlignmentsSparkArgumentCollection
             discoverStageArgs
-            = new DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection();
+            = new DiscoverVariantsFromContigAlignmentsSparkArgumentCollection();
 
     @Argument(doc = "file containing non-canonical chromosome names (e.g chrUn_KI270588v1) in the reference, human reference (hg19 or hg38) assumed when omitted",
             shortName = "alt-tigs",
             fullName = "non-canonical-contig-names-file", optional = true)
-    public String nonCanonicalChromosomeNamesFile;
+    private String nonCanonicalChromosomeNamesFile;
 
     @Argument(doc = "prefix for output files (including VCF files and if enabled, the signaling assembly contig's alignments); sample name will be appended after the provided argument",
             shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME)
     private String outputPrefix;
 
-    @Argument(doc = "output SAM files", fullName = "write-sam", optional = true)
+    @Argument(doc = "output query-name sorted SAM files for local assembly contigs whose alignment signature could not be used for emitting un-ambiguous calls",
+            fullName = "write-sam", optional = true)
     private boolean writeSAMFiles;
+
+    public static final String SIMPLE_CHIMERA_VCF_FILE_NAME = "NonComplex.vcf";
+    public static final String COMPLEX_CHIMERA_VCF_FILE_NAME = "Complex.vcf";
+    public static final String REINTERPRETED_1_SEG_CALL_VCF_FILE_NAME = "cpx_reinterpreted_simple_1_seg.vcf";
+    public static final String REINTERPRETED_MULTI_SEG_CALL_VCF_FILE_NAME = "cpx_reinterpreted_simple_multi_seg.vcf";
+    public static final String MERGED_VCF_FILE_NAME = "merged_simple.vcf";
 
     @Override
     public boolean requiresReference() {
@@ -134,167 +150,345 @@ public final class SvDiscoverFromLocalAssemblyContigAlignmentsSpark extends GATK
     @Override
     protected void runTool(final JavaSparkContext ctx) {
 
+        validateParams();
+
         final Broadcast<SVIntervalTree<VariantContext>> cnvCallsBroadcast =
                 StructuralVariationDiscoveryPipelineSpark.broadcastCNVCalls(ctx, getHeaderForReads(),
                         discoverStageArgs.cnvCallsFile);
-        final String outputPrefixWithSampleName = outputPrefix + SVUtils.getSampleId(getHeaderForReads()) + "_";
-        final SvDiscoveryInputData svDiscoveryInputData =
-                new SvDiscoveryInputData(ctx, discoverStageArgs, outputPrefixWithSampleName,
+        final String outputPrefixWithSampleName = getOutputPrefix();
+        final SvDiscoveryInputMetaData svDiscoveryInputMetaData =
+                new SvDiscoveryInputMetaData(ctx, discoverStageArgs, nonCanonicalChromosomeNamesFile, outputPrefixWithSampleName,
                         null, null, null,
                         cnvCallsBroadcast,
-                        getReads(), getHeaderForReads(), getReference(), localLogger);
+                        getHeaderForReads(), getReference(), getDefaultToolVCFHeaderLines(), localLogger);
+        final JavaRDD<GATKRead> assemblyRawAlignments = getReads();
 
-        final EnumMap<RawTypes, JavaRDD<AssemblyContigWithFineTunedAlignments>> contigsByPossibleRawTypes =
-                preprocess(svDiscoveryInputData, nonCanonicalChromosomeNamesFile, writeSAMFiles);
+        final AssemblyContigsClassifiedByAlignmentSignatures contigsByPossibleRawTypes =
+                preprocess(svDiscoveryInputMetaData, assemblyRawAlignments);
 
-        dispatchJobs(contigsByPossibleRawTypes, svDiscoveryInputData);
+        final List<VariantContext> variants =
+                dispatchJobs(ctx, contigsByPossibleRawTypes, svDiscoveryInputMetaData, assemblyRawAlignments, writeSAMFiles);
+        contigsByPossibleRawTypes.unpersist();
+
+        filterAndWriteMergedVCF(outputPrefixWithSampleName, variants, svDiscoveryInputMetaData);
+    }
+
+
+    private void validateParams() {
+        discoverStageArgs.validate();
+    }
+
+    /**
+     * @return prefix of outputs, with {@link #outputPrefix} decorated with sample name and trailing underscore
+     */
+    private String getOutputPrefix() {
+        if ( Files.exists(Paths.get(outputPrefix)) ) {
+            if (Files.isDirectory(Paths.get(outputPrefix))) // existing directory
+                return outputPrefix + (outputPrefix.endsWith("/") ? "" : "/") + SVUtils.getSampleId(getHeaderForReads()) + "_";
+            else
+                throw new UserException("Provided prefix for output is pointing to an existing file: " + outputPrefix); // to avoid accidental override of a file
+        } else { // prefixForOutput doesn't point to an existing file or directory
+            return outputPrefix + (outputPrefix.endsWith("/") ? "" : "_") + SVUtils.getSampleId(getHeaderForReads()) + "_";
+        }
     }
 
     //==================================================================================================================
+
+    public static final class AssemblyContigsClassifiedByAlignmentSignatures {
+        private final JavaRDD<AssemblyContigWithFineTunedAlignments> unknown;
+        private final JavaRDD<AssemblyContigWithFineTunedAlignments> simple;
+        private final JavaRDD<AssemblyContigWithFineTunedAlignments> complex;
+
+        private AssemblyContigsClassifiedByAlignmentSignatures(final JavaRDD<AssemblyContigWithFineTunedAlignments> contigs) {
+            unknown = contigs.filter(tig -> tig.getAlignmentSignatureBasicType().equals(UNKNOWN)).cache();
+            simple = contigs.filter(tig -> tig.getAlignmentSignatureBasicType().equals(SIMPLE_CHIMERA)).cache();
+            complex = contigs.filter(tig -> tig.getAlignmentSignatureBasicType().equals(COMPLEX)).cache();
+        }
+
+        public JavaRDD<AssemblyContigWithFineTunedAlignments> getContigsWithSignatureClassifiedAsUnknown() {
+            return unknown;
+        }
+
+        public JavaRDD<AssemblyContigWithFineTunedAlignments> getContigsWithSignatureClassifiedAsSimpleChimera() {
+            return simple;
+        }
+
+        public JavaRDD<AssemblyContigWithFineTunedAlignments> getContigsWithSignatureClassifiedAsComplex() {
+            return complex;
+        }
+
+        public void unpersist() {
+            simple.unpersist(false);
+            complex.unpersist(false);
+            unknown.unpersist(false);
+        }
+
+        /**
+         * Write SAM file, if requested, for original alignments of contigs recognized as "Ambiguous", "Incomplete", and "MisAssemblySuspect"
+         * TODO: 11/17/17 salvation on assembly contigs that 1) has ambiguous "best" configuration, and 2) has incomplete picture; and flag accordingly
+         */
+        private void writeSAMfilesForUnknown(final String outputPrefix, final JavaRDD<GATKRead> assemblyRawAlignments,
+                                             final SAMFileHeader header) {
+
+            final Map<String, ReasonForAlignmentClassificationFailure> tigNameToReason =
+                    unknown.mapToPair(tig -> new Tuple2<>(tig.getContigName(), tig.getReasonForAlignmentClassificationFailure())).collectAsMap();
+
+            final Set<String> namesOfInterest = new HashSet<>(tigNameToReason.keySet());
+
+            final List<GATKRead> contigRawAlignments = new ArrayList<>(assemblyRawAlignments
+                    .filter(read -> namesOfInterest.contains(read.getName())).collect());
+            contigRawAlignments.sort(Comparator.comparing(GATKRead::getName));
+            final SAMFileHeader clone = header.clone();
+            clone.setSortOrder(SAMFileHeader.SortOrder.queryname);
+
+            final EnumMap<ReasonForAlignmentClassificationFailure, SAMFileWriter> writerForEachCase = new EnumMap<>(ReasonForAlignmentClassificationFailure.class);
+            final SAMFileWriterFactory factory = new SAMFileWriterFactory().setCreateIndex(true);
+            writerForEachCase.put(ReasonForAlignmentClassificationFailure.AMBIGUOUS,
+                    factory.makeSAMOrBAMWriter(clone, true, IOUtils.getPath(outputPrefix + ReasonForAlignmentClassificationFailure.AMBIGUOUS.name() + ".bam"))
+            );
+            writerForEachCase.put(ReasonForAlignmentClassificationFailure.INCOMPLETE,
+                    factory.makeSAMOrBAMWriter(clone, true, IOUtils.getPath(outputPrefix + ReasonForAlignmentClassificationFailure.INCOMPLETE.name() + ".bam"))
+            );
+            writerForEachCase.put(ReasonForAlignmentClassificationFailure.UNINFORMATIVE,
+                    factory.makeSAMOrBAMWriter(clone, true, IOUtils.getPath(outputPrefix + ReasonForAlignmentClassificationFailure.UNINFORMATIVE.name() + ".bam"))
+            );
+
+            contigRawAlignments.forEach(read -> {
+                final ReasonForAlignmentClassificationFailure reason = tigNameToReason.get(read.getName());
+                writerForEachCase.get(reason).addAlignment(read.convertToSAMRecord(header));
+            });
+            writerForEachCase.values().forEach(SAMFileWriter::close);
+        }
+    }
 
     /**
      * First parse the input alignments, then classify the assembly contigs based on their alignment signatures,
      * and return the contigs that are classified together for downstream inference.
      */
-    public static EnumMap<RawTypes, JavaRDD<AssemblyContigWithFineTunedAlignments>> preprocess(final SvDiscoveryInputData svDiscoveryInputData,
-                                                                                               final String nonCanonicalChromosomeNamesFile,
-                                                                                               final boolean writeSAMFiles) {
+    public static AssemblyContigsClassifiedByAlignmentSignatures preprocess(final SvDiscoveryInputMetaData svDiscoveryInputMetaData,
+                                                                            final JavaRDD<GATKRead> assemblyRawAlignments) {
 
-        final Broadcast<SAMSequenceDictionary> referenceSequenceDictionaryBroadcast = svDiscoveryInputData.referenceSequenceDictionaryBroadcast;
-        final Broadcast<SAMFileHeader> headerBroadcast = svDiscoveryInputData.headerBroadcast;
-        final JavaRDD<GATKRead> assemblyRawAlignments = svDiscoveryInputData.assemblyRawAlignments;
-        final Logger toolLogger = svDiscoveryInputData.toolLogger;
+        final Broadcast<SAMFileHeader> headerBroadcast = svDiscoveryInputMetaData.getSampleSpecificData().getHeaderBroadcast();
+        final Broadcast<Set<String>> canonicalChromosomesBroadcast = svDiscoveryInputMetaData.getReferenceData().getCanonicalChromosomesBroadcast();
+        final Logger toolLogger = svDiscoveryInputMetaData.getToolLogger();
 
-        // filter alignments and split the gaps, hence the name "reconstructed"
         final JavaRDD<AssemblyContigWithFineTunedAlignments> contigsWithChimericAlignmentsReconstructed =
                 AssemblyContigAlignmentsConfigPicker
                         .createOptimalCoverageAlignmentSetsForContigs(assemblyRawAlignments, headerBroadcast.getValue(),
-                                nonCanonicalChromosomeNamesFile, 0.0, toolLogger)
-                        .filter(AssemblyContigWithFineTunedAlignments::isInformative).cache();
+                                canonicalChromosomesBroadcast.getValue(), 0.0, toolLogger)
+                        .cache();
         toolLogger.info( contigsWithChimericAlignmentsReconstructed.count() +
                 " contigs with chimeric alignments potentially giving SV signals.");
 
-        // classify assembly contigs by their possible type of SV based on studying alignment signature
-        final EnumMap<RawTypes, JavaRDD<AssemblyContigWithFineTunedAlignments>> contigsByPossibleRawTypes =
-                AssemblyContigAlignmentSignatureClassifier.classifyContigs(contigsWithChimericAlignmentsReconstructed,
-                        referenceSequenceDictionaryBroadcast, toolLogger);
-
-        // write SAM file, if requested, for original alignments of contigs recognized as "Ambiguous", "Incomplete", and "MisAssemblySuspect"
-        if (writeSAMFiles) {
-            final String outputPrefix = svDiscoveryInputData.outputPath;
-
-            final Set<String> ambiguousContigNames = new HashSet<>( contigsByPossibleRawTypes.get(RawTypes.Ambiguous).map(AssemblyContigWithFineTunedAlignments::getContigName).collect() );
-            final Set<String> incompleteContigNames = new HashSet<>( contigsByPossibleRawTypes.get(RawTypes.Incomplete).map(AssemblyContigWithFineTunedAlignments::getContigName).collect() );
-            final Set<String> misAssemblySuspectContigNames = new HashSet<>( contigsByPossibleRawTypes.get(RawTypes.MisAssemblySuspect).map(AssemblyContigWithFineTunedAlignments::getContigName).collect() );
-
-            final SAMFileHeader header = headerBroadcast.getValue();
-            SvDiscoveryUtils.writeSAMRecords(assemblyRawAlignments, ambiguousContigNames, outputPrefix + RawTypes.Ambiguous.name() + ".bam", header);
-            SvDiscoveryUtils.writeSAMRecords(assemblyRawAlignments, incompleteContigNames, outputPrefix + RawTypes.Incomplete.name() + ".bam", header);
-            SvDiscoveryUtils.writeSAMRecords(assemblyRawAlignments, misAssemblySuspectContigNames, outputPrefix + RawTypes.MisAssemblySuspect.name() + ".bam", header);
-        }
-
-        return contigsByPossibleRawTypes;
+        return new AssemblyContigsClassifiedByAlignmentSignatures(contigsWithChimericAlignmentsReconstructed);
     }
-
-    //==================================================================================================================
 
     /**
      * Sends assembly contigs classified based on their alignment signature to
      * a corresponding breakpoint location inference unit.
      *
-     * Two VCF files will be output: {@link #outputPrefix}"NonComplex.vcf" and {@link #outputPrefix}"Cpx.vcf".
-     *
-     * Note that
-     * {@link AssemblyContigAlignmentSignatureClassifier.RawTypes#Incomplete},
-     * {@link AssemblyContigAlignmentSignatureClassifier.RawTypes#Ambiguous}, and
-     * {@link AssemblyContigAlignmentSignatureClassifier.RawTypes#MisAssemblySuspect}
+     * Note that contigs with alignment signature classified as
+     * {@link AssemblyContigWithFineTunedAlignments.AlignmentSignatureBasicType#UNKNOWN}
      * currently DO NOT generate any VCF yet.
-     * However, if flag {@link #writeSAMFiles} is turned on,
-     * alignments of all contigs that are classified to be any of
-     * {@link AssemblyContigAlignmentSignatureClassifier.RawTypes}
-     * will be extracted and put in SAM files in {@link #outputPrefix} too.
      */
-    public static void dispatchJobs(final EnumMap<RawTypes, JavaRDD<AssemblyContigWithFineTunedAlignments>> contigsByPossibleRawTypes,
-                                    final SvDiscoveryInputData svDiscoveryInputData) {
+    public static List<VariantContext> dispatchJobs(final JavaSparkContext ctx,
+                                                    final AssemblyContigsClassifiedByAlignmentSignatures contigsByPossibleRawTypes,
+                                                    final SvDiscoveryInputMetaData svDiscoveryInputMetaData,
+                                                    final JavaRDD<GATKRead> assemblyRawAlignments,
+                                                    final boolean writeSAMFiles) {
 
-        final String outputPrefixWithSampleName = svDiscoveryInputData.outputPath;
+        final String outputPrefixWithSampleName = svDiscoveryInputMetaData.getOutputPath();
 
-        // TODO: 1/10/18 bring back read annotation, see ticket 4228
-        forNonComplexVariants(contigsByPossibleRawTypes, svDiscoveryInputData);
+        final List<VariantContext> simpleChimeraVariants =
+                extractSimpleVariants(contigsByPossibleRawTypes.simple, svDiscoveryInputMetaData, outputPrefixWithSampleName);
 
-        final List<VariantContext> complexVariants =
-                CpxVariantInterpreter.inferCpxVariant(contigsByPossibleRawTypes.get(RawTypes.Cpx), svDiscoveryInputData);
+        final CpxAndReInterpretedSimpleVariants complexChimeraVariants =
+                extractCpxVariants(ctx, contigsByPossibleRawTypes.complex, svDiscoveryInputMetaData, assemblyRawAlignments, outputPrefixWithSampleName);
 
-        svDiscoveryInputData.updateOutputPath(outputPrefixWithSampleName + RawTypes.Cpx.name() + ".vcf");
-        SVVCFWriter.writeVCF(complexVariants, svDiscoveryInputData.outputPath,
-                svDiscoveryInputData.referenceSequenceDictionaryBroadcast.getValue(), svDiscoveryInputData.toolLogger);
+        if (writeSAMFiles) {
+            contigsByPossibleRawTypes.writeSAMfilesForUnknown(outputPrefixWithSampleName, assemblyRawAlignments,
+                    svDiscoveryInputMetaData.getSampleSpecificData().getHeaderBroadcast().getValue());
+        }
+
+        final List<VariantContext> inversions = extractInversions();// TODO: 6/29/18 placeholder
+
+        // merged output
+        final List<VariantContext> merged = new ArrayList<>(simpleChimeraVariants.size() + complexChimeraVariants.reInterpretedSimpleVariants.size() + inversions.size());
+        merged.addAll(simpleChimeraVariants);
+        merged.addAll(complexChimeraVariants.reInterpretedSimpleVariants);
+        merged.addAll(inversions);
+        return merged;
     }
 
-    private static void forNonComplexVariants(final EnumMap<RawTypes, JavaRDD<AssemblyContigWithFineTunedAlignments>> contigsByPossibleRawTypes,
-                                              final SvDiscoveryInputData svDiscoveryInputData) {
+    // return simple variants, including BND's
+    private static List<VariantContext> extractSimpleVariants(final JavaRDD<AssemblyContigWithFineTunedAlignments> contigsWithSimpleChimera,
+                                                              final SvDiscoveryInputMetaData svDiscoveryInputMetaData,
+                                                              final String outputPrefixWithSampleName) {
+        final List<VariantContext> simpleVariants =
+                SimpleNovelAdjacencyInterpreter.makeInterpretation(contigsWithSimpleChimera, svDiscoveryInputMetaData);
+        final Logger logger = svDiscoveryInputMetaData.getDiscoverStageArgs().runInDebugMode ? svDiscoveryInputMetaData.getToolLogger() : null;
+        SVVCFWriter.writeVCF(simpleVariants, outputPrefixWithSampleName + SIMPLE_CHIMERA_VCF_FILE_NAME,
+                svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast().getValue(),
+                svDiscoveryInputMetaData.getDefaultToolVCFHeaderLines(), logger);
+        return simpleVariants;
+    }
 
-        final String sampleId = svDiscoveryInputData.sampleId;
-        final Broadcast<ReferenceMultiSource> referenceBroadcast = svDiscoveryInputData.referenceBroadcast;
-        final Broadcast<SAMSequenceDictionary> referenceSequenceDictionaryBroadcast = svDiscoveryInputData.referenceSequenceDictionaryBroadcast;
-        final Broadcast<SVIntervalTree<VariantContext>> cnvCallsBroadcast = svDiscoveryInputData.cnvCallsBroadcast;
-        final String outputPrefixWithSampleName = svDiscoveryInputData.outputPath;
+    private static final class CpxAndReInterpretedSimpleVariants {
+        private final List<VariantContext> cpxVariants;
+        private final List<VariantContext> reInterpretedSimpleVariants;
 
-        svDiscoveryInputData.updateOutputPath(outputPrefixWithSampleName + "NonComplex.vcf");
+        CpxAndReInterpretedSimpleVariants(final List<VariantContext> cpxVariants, final List<VariantContext> reInterpretedSimpleVariants) {
+            this.cpxVariants = cpxVariants;
+            this.reInterpretedSimpleVariants = reInterpretedSimpleVariants;
+        }
+    }
 
-        final JavaRDD<AssemblyContigWithFineTunedAlignments> nonComplexSignatures =
-                contigsByPossibleRawTypes.get(RawTypes.InsDel)
-                        .union(contigsByPossibleRawTypes.get(RawTypes.IntraChrStrandSwitch))
-                        .union(contigsByPossibleRawTypes.get(RawTypes.MappedInsertionBkpt));
+    private static CpxAndReInterpretedSimpleVariants extractCpxVariants(final JavaSparkContext ctx,
+                                                                        final JavaRDD<AssemblyContigWithFineTunedAlignments> contigsWithCpxAln,
+                                                                        final SvDiscoveryInputMetaData svDiscoveryInputMetaData,
+                                                                        final JavaRDD<GATKRead> assemblyRawAlignments,
+                                                                        final String outputPrefixWithSampleName) {
+        final Logger toolLogger = svDiscoveryInputMetaData.getDiscoverStageArgs().runInDebugMode ? svDiscoveryInputMetaData.getToolLogger() : null;
+        final Set<VCFHeaderLine> defaultToolVCFHeaderLines = svDiscoveryInputMetaData.getDefaultToolVCFHeaderLines();
+        final List<VariantContext> complexVariants =
+                CpxVariantInterpreter.makeInterpretation(contigsWithCpxAln, svDiscoveryInputMetaData);
+        SVVCFWriter.writeVCF(complexVariants, outputPrefixWithSampleName + COMPLEX_CHIMERA_VCF_FILE_NAME,
+                svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast().getValue(),
+                defaultToolVCFHeaderLines, toolLogger);
 
-        final List<VariantContext> annotatedSimpleVariants =
-                new SimpleNovelAdjacencyInterpreter()
-                        .inferTypeFromSingleContigSimpleChimera(nonComplexSignatures, svDiscoveryInputData)
-                        .flatMap(pair ->
-                            getVariantContextIterator(pair, sampleId, referenceBroadcast,
-                                    referenceSequenceDictionaryBroadcast, cnvCallsBroadcast)
-                        )
-                        .collect();
+        final JavaRDD<VariantContext> complexVariantsRDD = ctx.parallelize(complexVariants);
+        final SegmentedCpxVariantSimpleVariantExtractor.ExtractedSimpleVariants reInterpretedSimple =
+                SegmentedCpxVariantSimpleVariantExtractor.extract(complexVariantsRDD, svDiscoveryInputMetaData, assemblyRawAlignments);
+        final SAMSequenceDictionary refSeqDict = svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast().getValue();
+        final String derivedOneSegmentSimpleVCF = outputPrefixWithSampleName + REINTERPRETED_1_SEG_CALL_VCF_FILE_NAME;
+        final String derivedMultiSegmentSimpleVCF = outputPrefixWithSampleName + REINTERPRETED_MULTI_SEG_CALL_VCF_FILE_NAME;
+        SVVCFWriter.writeVCF(reInterpretedSimple.getReInterpretZeroOrOneSegmentCalls(), derivedOneSegmentSimpleVCF, refSeqDict, defaultToolVCFHeaderLines, toolLogger);
+        SVVCFWriter.writeVCF(reInterpretedSimple.getReInterpretMultiSegmentsCalls(), derivedMultiSegmentSimpleVCF, refSeqDict, defaultToolVCFHeaderLines, toolLogger);
 
-        SVVCFWriter.writeVCF(annotatedSimpleVariants, svDiscoveryInputData.outputPath,
-                svDiscoveryInputData.referenceSequenceDictionaryBroadcast.getValue(), svDiscoveryInputData.toolLogger);
+        return new CpxAndReInterpretedSimpleVariants(complexVariants, reInterpretedSimple.getMergedReinterpretedCalls());
+    }
+
+    // TODO: 6/29/18 when BND variants are interpreted using short read evidence (e.g. EvidenceTargetLinks, resolved inversions), put it here
+    private static List<VariantContext> extractInversions() {
+        return Collections.emptyList();
+    }
+
+    //==================================================================================================================
+
+    /**
+     * Apply filters (that implements {@link StructuralVariantFilter}) given list of variants,
+     * and write the variants to a single VCF file.
+     * @param outputPrefixWithSampleName    prefix with sample name
+     * @param variants                      variants to which filters are to be applied and written to file
+     * @param svDiscoveryInputMetaData      metadata for use in filtering and file output
+     */
+    public static void filterAndWriteMergedVCF(final String outputPrefixWithSampleName,
+                                               final List<VariantContext> variants,
+                                               final SvDiscoveryInputMetaData svDiscoveryInputMetaData) {
+        final List<VariantContext> variantsWithFilterApplied = new ArrayList<>(variants.size());
+        final List<StructuralVariantFilter> filters = Arrays.asList(
+                new SVMappingQualityFilter(svDiscoveryInputMetaData.getDiscoverStageArgs().minMQ),
+                new SVAlignmentLengthFilter(svDiscoveryInputMetaData.getDiscoverStageArgs().minAlignLength));
+        for (final VariantContext variant : variants) {
+            String svType = variant.getAttributeAsString(GATKSVVCFConstants.SVTYPE, "");
+            if (svType.equals(GATKSVVCFConstants.SYMB_ALT_ALLELE_DEL) || svType.equals(GATKSVVCFConstants.SYMB_ALT_ALLELE_INS) || svType.equals(GATKSVVCFConstants.SYMB_ALT_ALLELE_DUP)) {
+                if (Math.abs(variant.getAttributeAsInt(GATKSVVCFConstants.SVLEN, 0)) < StructuralVariationDiscoveryArgumentCollection.STRUCTURAL_VARIANT_SIZE_LOWER_BOUND )
+                    continue;
+            }
+            variantsWithFilterApplied.add(applyFilters(variant, filters));
+        }
+
+        final String out = outputPrefixWithSampleName + MERGED_VCF_FILE_NAME;
+        SVVCFWriter.writeVCF(variantsWithFilterApplied, out,
+                svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast().getValue(),
+                svDiscoveryInputMetaData.getDefaultToolVCFHeaderLines(),
+                svDiscoveryInputMetaData.getToolLogger());
     }
 
     /**
-     * This implementation is the 1st step going towards allowing re-interpretation,
-     * below we simply take the inferred type and turn it to a VC,
-     * future implementation may integrate other types of evidence and re-interpret if necessary
+     * Filters out variants by testing against provided
+     * filter key, threshold.
+     *
+     * Variants with value below specified threshold (or null value)
+     * are filtered out citing given reason.
+     *
+     * @throws ClassCastException if the value corresponding to provided key cannot be casted as a {@link Double}
      */
-    private static Iterator<VariantContext> getVariantContextIterator(final Tuple2<SimpleNovelAdjacencyAndChimericAlignmentEvidence, List<SvType>> pair,
-                                                                      final String sampleId,
-                                                                      final Broadcast<ReferenceMultiSource> referenceBroadcast,
-                                                                      final Broadcast<SAMSequenceDictionary> referenceSequenceDictionaryBroadcast,
-                                                                      final Broadcast<SVIntervalTree<VariantContext>> cnvCallsBroadcast)
-            throws IOException {
-        final SimpleNovelAdjacencyAndChimericAlignmentEvidence simpleNovelAdjacencyAndChimericAlignmentEvidence = pair._1;
-        final List<SvType> svTypes = pair._2;
-        if (svTypes.size() == 1) { // simple SV type
-            final SvType inferredType = svTypes.get(0);
-            final NovelAdjacencyAndAltHaplotype narl = simpleNovelAdjacencyAndChimericAlignmentEvidence.getNovelAdjacencyReferenceLocations();
-            final SimpleInterval variantPos = narl.getLeftJustifiedLeftRefLoc();
-            final int end = narl.getLeftJustifiedRightRefLoc().getEnd();
-            final VariantContext variantContext = AnnotatedVariantProducer
-                    .produceAnnotatedVcFromInferredTypeAndRefLocations(variantPos, end, narl.getComplication(),
-                            inferredType, simpleNovelAdjacencyAndChimericAlignmentEvidence.getAltHaplotypeSequence(),
-                            simpleNovelAdjacencyAndChimericAlignmentEvidence.getAlignmentEvidence(),
-                            referenceBroadcast, referenceSequenceDictionaryBroadcast, cnvCallsBroadcast, sampleId);
-            return Collections.singletonList(variantContext).iterator();
-        } else { // BND mate pair
-            final BreakEndVariantType firstMate = (BreakEndVariantType) svTypes.get(0);
-            final BreakEndVariantType secondMate = (BreakEndVariantType) svTypes.get(1);
+    private static VariantContext applyFilters(final VariantContext variantContext,
+                                               final List<StructuralVariantFilter> filters) {
 
-            final Tuple2<BreakEndVariantType, BreakEndVariantType> bndMates = new Tuple2<>(firstMate, secondMate);
-            final List<VariantContext> variantContexts = AnnotatedVariantProducer
-                    .produceAnnotatedBNDmatesVcFromNovelAdjacency(
-                            simpleNovelAdjacencyAndChimericAlignmentEvidence.getNovelAdjacencyReferenceLocations(),
-                            bndMates,
-                            simpleNovelAdjacencyAndChimericAlignmentEvidence.getAlignmentEvidence(),
-                            referenceBroadcast, referenceSequenceDictionaryBroadcast, sampleId);
-            return variantContexts.iterator();
+        final Set<String> appliedFilters = new HashSet<>();
+        for (final StructuralVariantFilter filter : filters) {
+            if ( !filter.test(variantContext) )
+                appliedFilters.add(filter.getName());
+        }
+
+        if (appliedFilters.isEmpty())
+            return variantContext;
+        else {
+            return new VariantContextBuilder(variantContext).filters(appliedFilters).make();
+        }
+    }
+
+    public interface StructuralVariantFilter extends VariantFilter {
+
+        /**
+         * @return name of filter for use in filtered record
+         */
+        String getName();
+    }
+    public static final class SVMappingQualityFilter implements StructuralVariantFilter {
+        static final long serialVersionUID = 1L;
+
+        private static final String attributeKey = GATKSVVCFConstants.MAPPING_QUALITIES;
+        private final int threshold;
+
+        public SVMappingQualityFilter(final int threshold) {
+            this.threshold = threshold;
+        }
+
+        @Override
+        public String getName() {
+            return GATKSVVCFConstants.ASSEMBLY_BASED_VARIANT_MQ_FILTER_KEY;
+        }
+
+        @Override
+        public boolean test(final VariantContext variantContext) {
+            if ( !variantContext.hasAttribute(GATKSVVCFConstants.CONTIG_NAMES) )
+                return true;
+
+            final List<String> mapQuals = SVUtils.getAttributeAsStringList(variantContext, attributeKey);
+            int maxMQ = 0;
+            for (final String mapQual : mapQuals) {
+                Integer integer = Integer.valueOf(mapQual);
+                maxMQ = maxMQ < integer ? integer : maxMQ;
+            }
+            return maxMQ >= threshold;
+        }
+    }
+
+    public static final class SVAlignmentLengthFilter implements StructuralVariantFilter {
+        static final long serialVersionUID = 1L;
+
+        private static final String attributeKey = GATKSVVCFConstants.MAX_ALIGN_LENGTH;
+        private final int threshold;
+
+        public SVAlignmentLengthFilter(final int threshold) {
+            this.threshold = threshold;
+        }
+
+        @Override
+        public String getName() {
+            return GATKSVVCFConstants.ASSEMBLY_BASED_VARIANT_ALN_LENGTH_FILTER_KEY;
+        }
+
+        @Override
+        public boolean test(final VariantContext variantContext) {
+            if ( !variantContext.hasAttribute(GATKSVVCFConstants.CONTIG_NAMES) )
+                return true;
+
+            final int alnLength = variantContext.getAttributeAsInt(attributeKey, 0);
+            return alnLength >= threshold;
         }
     }
 

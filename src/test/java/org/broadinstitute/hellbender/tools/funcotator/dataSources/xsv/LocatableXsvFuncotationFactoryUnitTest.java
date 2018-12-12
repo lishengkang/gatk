@@ -4,10 +4,14 @@ import htsjdk.tribble.Feature;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
+import org.apache.commons.io.FilenameUtils;
 import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.engine.FeatureInput;
+import org.broadinstitute.hellbender.engine.FeatureInputTestTools;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.ReferenceDataSource;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.testutils.FuncotatorReferenceTestUtils;
 import org.broadinstitute.hellbender.tools.funcotator.DataSourceFuncotationFactory;
 import org.broadinstitute.hellbender.tools.funcotator.Funcotation;
 import org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants;
@@ -15,15 +19,20 @@ import org.broadinstitute.hellbender.tools.funcotator.dataSources.TableFuncotati
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationBuilder;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.codecs.xsvLocatableTable.XsvLocatableTableCodec;
 import org.broadinstitute.hellbender.utils.codecs.xsvLocatableTable.XsvTableFeature;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * Unit tests for {@link LocatableXsvFuncotationFactory}.
@@ -41,8 +50,8 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
     static {
         referenceDataSourceMap = new HashMap<>(2);
 
-        referenceDataSourceMap.put(FuncotatorTestConstants.HG19_CHR19_REFERENCE_FILE_NAME, ReferenceDataSource.of( new File(FuncotatorTestConstants.HG19_CHR19_REFERENCE_FILE_NAME).toPath() ));
-        referenceDataSourceMap.put(FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME, ReferenceDataSource.of( new File(FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME).toPath() ));
+        referenceDataSourceMap.put(FuncotatorReferenceTestUtils.retrieveHg19Chr19Ref(), ReferenceDataSource.of( new File(FuncotatorReferenceTestUtils.retrieveHg19Chr19Ref()).toPath() ));
+        referenceDataSourceMap.put(FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(), ReferenceDataSource.of( new File(FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref()).toPath() ));
     }
 
     //==================================================================================================================
@@ -50,33 +59,6 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
 
     //==================================================================================================================
     // Helper Data Types:
-    private static class DummyTestFeature implements Feature {
-
-        private final String contig;
-        private final int start;
-        private final int stop;
-
-        public DummyTestFeature(final String contig, final int start, final int stop) {
-            this.contig = contig;
-            this.start = start;
-            this.stop = stop;
-        }
-
-        @Override
-        public String getContig() {
-            return contig;
-        }
-
-        @Override
-        public int getStart() {
-            return start;
-        }
-
-        @Override
-        public int getEnd() {
-            return stop;
-        }
-    }
 
     //==================================================================================================================
     // Helper Methods:
@@ -171,65 +153,60 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
                 // Trivial case the list of features is empty:
                 helpProvideForTestCreateFuncotations(
                         "chr3", 178866314, 178866314,
-                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                        "C", defaultAltAllele.getBaseString(), FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                         reportableFieldNames,
                         Collections.emptyList(), Collections.emptyList(),
-                        Collections.singletonList(new TableFuncotation(reportableFieldNames, emptyFieldList, defaultAltAllele, defaultDataSourceName))
+                        Collections.singletonList(TableFuncotation.create(reportableFieldNames, emptyFieldList, defaultAltAllele, defaultDataSourceName, null))
                 ),
                 // Trivial case where null Features are in the list:
                 helpProvideForTestCreateFuncotations(
                         "chr3", 178866314, 178866314,
-                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                        "C", defaultAltAllele.getBaseString(), FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                         reportableFieldNames,
                         Arrays.asList(null, null, null), Collections.emptyList(),
-                        Collections.singletonList(new TableFuncotation(reportableFieldNames, emptyFieldList, defaultAltAllele, defaultDataSourceName))
+                        Collections.singletonList(TableFuncotation.create(reportableFieldNames, emptyFieldList, defaultAltAllele, defaultDataSourceName, null))
                 ),
-//                // Trivial case where no XsvTableFeatures are in the list:
-//                helpProvideForTestCreateFuncotations(
-//                        "chr3", 178866314, 178866314,
-//                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
-//                        reportableFieldNames,
-//                        Collections.singletonList(new DummyTestFeature("chr3", 178866314,178866314)),
-//                        Collections.emptyList(),
-//                        Collections.singletonList(new TableFuncotation(reportableFieldNames, emptyFieldList, defaultAltAllele, defaultDataSourceName))
-//                ),
                 // One XsvTableFeature in list
                 helpProvideForTestCreateFuncotations(
                         "chr3", 178866314, 178866314,
-                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                        "C", defaultAltAllele.getBaseString(), FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                         fieldNames,
                         Collections.singletonList(
                             xsvTableFeature1
                         ),
                         Collections.emptyList(),
-                        Collections.singletonList(new TableFuncotation(xsvTableFeature1, defaultAltAllele, defaultDataSourceName))
+                        Collections.singletonList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null))
                 ),
                 // Two XsvTableFeatures in list
                 helpProvideForTestCreateFuncotations(
                         "chr3", 178866314, 178866314,
-                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                        "C", defaultAltAllele.getBaseString(), FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                         fieldNames,
                         Arrays.asList(
                                 xsvTableFeature1, xsvTableFeature2
                         ),
                         Collections.emptyList(),
-                        Arrays.asList(new TableFuncotation(xsvTableFeature1, defaultAltAllele, defaultDataSourceName), new TableFuncotation(xsvTableFeature2, defaultAltAllele, defaultDataSourceName))
+                        // TODO: Commented out because of issue #4930.  When issue is fixed, revert to this test case! (https://github.com/broadinstitute/gatk/issues/4930)
+//                        Arrays.asList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null), TableFuncotation.create(xsvTableFeature2, defaultAltAllele, defaultDataSourceName, null))
+                        Collections.singletonList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null))
                 ),
                 // Many XsvTableFeatures in list
                 helpProvideForTestCreateFuncotations(
                         "chr3", 178866314, 178866314,
-                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                        "C", defaultAltAllele.getBaseString(), FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                         fieldNames,
                         Arrays.asList(
                                 xsvTableFeature1, xsvTableFeature2, xsvTableFeature3
                         ),
                         Collections.emptyList(),
-                        Arrays.asList(new TableFuncotation(xsvTableFeature1, defaultAltAllele, defaultDataSourceName), new TableFuncotation(xsvTableFeature2, defaultAltAllele, defaultDataSourceName), new TableFuncotation(xsvTableFeature3, defaultAltAllele, defaultDataSourceName))
+                        // TODO: Commented out because of issue #4930.  When issue is fixed, revert to this test case! (https://github.com/broadinstitute/gatk/issues/4930)
+//                        Arrays.asList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null), TableFuncotation.create(xsvTableFeature2, defaultAltAllele, defaultDataSourceName, null), TableFuncotation.create(xsvTableFeature3, defaultAltAllele, defaultDataSourceName, null))
+                        Collections.singletonList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null))
                 ),
                 // Many XsvTableFeatures in list and non-empty GencodeFuncotations
                 helpProvideForTestCreateFuncotations(
                         "chr3", 178866314, 178866314,
-                        "C", defaultAltAllele.getBaseString(), FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                        "C", defaultAltAllele.getBaseString(), FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                         fieldNames,
                         Arrays.asList(
                                 xsvTableFeature1, xsvTableFeature2, xsvTableFeature3
@@ -237,7 +214,9 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
                         Collections.singletonList(
                                 new GencodeFuncotationBuilder().setChromosome("chr3").setStart(178866314).setEnd(178866314).build()
                         ),
-                        Arrays.asList(new TableFuncotation(xsvTableFeature1, defaultAltAllele, defaultDataSourceName), new TableFuncotation(xsvTableFeature2, defaultAltAllele, defaultDataSourceName), new TableFuncotation(xsvTableFeature3, defaultAltAllele, defaultDataSourceName))
+                        // TODO: Commented out because of issue #4930.  When issue is fixed, revert to this test case! (https://github.com/broadinstitute/gatk/issues/4930)
+//                        Arrays.asList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null), TableFuncotation.create(xsvTableFeature2, defaultAltAllele, defaultDataSourceName, null), TableFuncotation.create(xsvTableFeature3, defaultAltAllele, defaultDataSourceName, null))
+                        Collections.singletonList(TableFuncotation.create(xsvTableFeature1, defaultAltAllele, defaultDataSourceName, null))
                 ),
         };
     }
@@ -245,29 +224,23 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
     @DataProvider
     private Object[][] provideForTestSetSupportedFuncotationFields() {
         return new Object[][] {
-                // Empty list of data files:
-                {Collections.emptyList(), new LinkedHashSet<>()},
                 // One Valid XSV (csv) Locatable Data File:
                 {
-                        Collections.singletonList(Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE1_PATH)),
+                        IOUtils.getPath(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE1_DATA_PATH),
+                        IOUtils.getPath(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE1_CONFIG_PATH),
                         new LinkedHashSet<>(Arrays.asList("XSV_LOCATABLE_TEST_NAME_Villain", "XSV_LOCATABLE_TEST_NAME_test_val", "XSV_LOCATABLE_TEST_NAME_Bond"))
+                },
+                // One Valid XSV (csv) Locatable Data File:
+                {
+                        IOUtils.getPath(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE2_DATA_PATH),
+                        IOUtils.getPath(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE2_CONFIG_PATH),
+                        new LinkedHashSet<>(Arrays.asList("SECOND_XSV_NAME_Car_Maker", "SECOND_XSV_NAME_Tire_Maker", "SECOND_XSV_NAME_Parent_Company"))
                 },
                 // One Valid XSV (tsv) Locatable Data File:
                 {
-                        Collections.singletonList(Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE3_PATH)),
+                        IOUtils.getPath(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE3_DATA_PATH),
+                        IOUtils.getPath(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE3_CONFIG_PATH),
                         new LinkedHashSet<>(Arrays.asList("XSV_LOCATABLE_TEST_NAME_Villain", "XSV_LOCATABLE_TEST_NAME_test_val", "XSV_LOCATABLE_TEST_NAME_Bond"))
-                },
-                // Two Valid XSV Locatable Data Files:
-                {
-                    Arrays.asList(Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE1_PATH), Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE2_PATH)),
-                    new LinkedHashSet<>(Arrays.asList("XSV_LOCATABLE_TEST_NAME_Villain", "XSV_LOCATABLE_TEST_NAME_test_val", "XSV_LOCATABLE_TEST_NAME_Bond",
-                            "SECOND_XSV_NAME_Car_Maker", "SECOND_XSV_NAME_Tire_Maker", "SECOND_XSV_NAME_Parent_Company"))
-                },
-                // Three Valid XSV Locatable Data Files:
-                {
-                        Arrays.asList(Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE1_PATH), Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE2_PATH), Paths.get(FuncotatorTestConstants.XSV_LOCATABLE_TEST_FILE3_PATH)),
-                        new LinkedHashSet<>(Arrays.asList("XSV_LOCATABLE_TEST_NAME_Villain", "XSV_LOCATABLE_TEST_NAME_test_val", "XSV_LOCATABLE_TEST_NAME_Bond",
-                                "SECOND_XSV_NAME_Car_Maker", "SECOND_XSV_NAME_Tire_Maker", "SECOND_XSV_NAME_Parent_Company"))
                 },
         };
     }
@@ -279,10 +252,10 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
     public void testGetName(final String name, final String expected) {
         final LocatableXsvFuncotationFactory locatableXsvFuncotationFactory;
         if ( name == null ) {
-            locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(LocatableXsvFuncotationFactory.DEFAULT_NAME, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING);
+            locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(LocatableXsvFuncotationFactory.DEFAULT_NAME, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING, new LinkedHashMap<>(), null);
         }
         else {
-            locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(name, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING);
+            locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(name, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING, new LinkedHashMap<>(), null);
         }
 
         Assert.assertEquals( locatableXsvFuncotationFactory.getName(), expected );
@@ -296,8 +269,22 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
                                        final List<GencodeFuncotation> gencodeFuncotations,
                                        final List<Funcotation> expected) {
 
-        final LocatableXsvFuncotationFactory locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(defaultDataSourceName, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING, reportableFuncotationFieldNames);
+        // Create a temporary file for the "backing data" which will only contain the header:
+        final Path headerBackingDataFilePath = createTempPath("headerBackingDataFile", "csv");
+        final Path configFilePath;
+        try {
+            Files.write(headerBackingDataFilePath, ("CONTIG,START,END," + reportableFuncotationFieldNames.stream().collect(Collectors.joining(","))).getBytes());
 
+            // Create a temporary file for the config file that points to the temporary file for the backing data:
+            configFilePath = createTemporaryConfigFile(headerBackingDataFilePath);
+        }
+        catch (final IOException ex) {
+            throw new GATKException("Could not write to temp file for testing: " + headerBackingDataFilePath.toUri(), ex);
+        }
+
+        final FeatureInput<? extends Feature> featureInput                   = FeatureInputTestTools.createFeatureInput( configFilePath.toUri().toString(), defaultDataSourceName );
+        final LocatableXsvFuncotationFactory  locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(defaultDataSourceName, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING, new LinkedHashMap<>(), featureInput);
+        locatableXsvFuncotationFactory.setSupportedFuncotationFields(headerBackingDataFilePath);
 
         Assert.assertEquals(
                 locatableXsvFuncotationFactory.createFuncotationsOnVariant( variant, referenceContext, featureList ),
@@ -311,11 +298,14 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
     }
 
     @Test(dataProvider = "provideForTestSetSupportedFuncotationFields")
-    public void testSetSupportedFuncotationFields(final List<Path> dataFilePaths,
+    public void testSetSupportedFuncotationFields(final Path dataFilePath,
+                                                  final Path configFilePath,
                                                   final LinkedHashSet<String> expected) {
-        final LocatableXsvFuncotationFactory locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory();
 
-        locatableXsvFuncotationFactory.setSupportedFuncotationFields(dataFilePaths);
+        final FeatureInput<? extends Feature> featureInput                   = FeatureInputTestTools.createFeatureInput(configFilePath.toUri().toString(), defaultDataSourceName);
+        final LocatableXsvFuncotationFactory  locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(LocatableXsvFuncotationFactory.DEFAULT_NAME, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING, new LinkedHashMap<>(), featureInput);
+
+        locatableXsvFuncotationFactory.setSupportedFuncotationFields(dataFilePath);
 
         Assert.assertEquals(
                 locatableXsvFuncotationFactory.getSupportedFuncotationFields(),
@@ -325,7 +315,76 @@ public class LocatableXsvFuncotationFactoryUnitTest extends GATKBaseTest {
 
     @Test(expectedExceptions = GATKException.class)
     public void testGetSupportedFuncotationFields() {
-        final LocatableXsvFuncotationFactory locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory();
+        final LocatableXsvFuncotationFactory locatableXsvFuncotationFactory = new LocatableXsvFuncotationFactory(LocatableXsvFuncotationFactory.DEFAULT_NAME, DataSourceFuncotationFactory.DEFAULT_VERSION_STRING, new LinkedHashMap<>(), null);
         locatableXsvFuncotationFactory.getSupportedFuncotationFields();
+    }
+
+    private Path createTemporaryConfigFile(final Path backingDataSourcePath) throws IOException {
+        return createTemporaryConfigFile(backingDataSourcePath, ",");
+    }
+
+    private Path createTemporaryConfigFile(final Path backingDataSourcePath, final String delimiter) throws IOException {
+        // Config file must be next to backingDataSourcePath, and have the same base name, with the .config extension:
+        final String backingDataSourceFileName = backingDataSourcePath.toFile().getName();
+        final String configFileBaseName = FilenameUtils.removeExtension(backingDataSourceFileName);
+        final Path configPath = backingDataSourcePath.resolveSibling(configFileBaseName + XsvLocatableTableCodec.CONFIG_FILE_EXTENSION);
+
+        final File configFile = configPath.toAbsolutePath().toFile();
+        configFile.createNewFile();
+
+        try(final PrintWriter writer = new PrintWriter(configPath.toAbsolutePath().toFile())) {
+            writer.println("name = ");
+            writer.println("version = TEST");
+            writer.println("src_file = " + backingDataSourceFileName);
+            writer.println("origin_location = LocatableXsvFuncotationFactoryUnitTest.java");
+            writer.println("preprocessing_script = ");
+            writer.println("");
+            writer.println("# Supported types:");
+            writer.println("# simpleXSV    -- Arbitrary separated value table (e.g. CSV), keyed off Gene Name OR Transcript ID");
+            writer.println("# locatableXSV -- Arbitrary separated value table (e.g. CSV), keyed off a genome location");
+            writer.println("# gencode      -- Custom datasource class for GENCODE");
+            writer.println("# cosmic       -- Custom datasource class for COSMIC");
+            writer.println("# vcf          -- Custom datasource class for Variant Call Format (VCF) files");
+            writer.println("                    type = locatableXSV");
+            writer.println("");
+            writer.println("# Required field for GENCODE files.");
+            writer.println("# Path to the FASTA file from which to load the sequences for GENCODE transcripts:");
+            writer.println("gencode_fasta_path =");
+            writer.println("");
+            writer.println("# Required field for simpleXSV files.");
+            writer.println("# Valid values:");
+            writer.println("#     GENE_NAME");
+            writer.println("#     TRANSCRIPT_ID");
+            writer.println("xsv_key = ");
+            writer.println("");
+            writer.println("# Required field for simpleXSV files.");
+            writer.println("# The 0-based index of the column containing the key on which to match");
+            writer.println("                    xsv_key_column =");
+            writer.println("");
+            writer.println("# Required field for simpleXSV AND locatableXSV files.");
+            writer.println("# The delimiter by which to split the XSV file into columns.");
+            writer.println("xsv_delimiter = " + delimiter);
+            writer.println("");
+            writer.println("# Required field for simpleXSV files.");
+            writer.println("# Whether to permissively match the number of columns in the header and data rows");
+            writer.println("# Valid values:");
+            writer.println("#     true");
+            writer.println("#     false");
+            writer.println("xsv_permissive_cols = ");
+            writer.println("");
+            writer.println("# Required field for locatableXSV files.");
+            writer.println("# The 0-based index of the column containing the contig for each row");
+            writer.println("contig_column = 0 ");
+            writer.println("");
+            writer.println("# Required field for locatableXSV files.");
+            writer.println("# The 0-based index of the column containing the start position for each row");
+            writer.println("start_column = 1 ");
+            writer.println("");
+            writer.println("# Required field for locatableXSV files.");
+            writer.println("# The 0-based index of the column containing the end position for each row");
+            writer.println("end_column = 2");
+        }
+
+        return configPath;
     }
 }

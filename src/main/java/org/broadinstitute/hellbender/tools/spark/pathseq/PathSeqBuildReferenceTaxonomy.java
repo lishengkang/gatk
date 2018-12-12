@@ -43,7 +43,7 @@ import java.util.*;
  * <h3>Usage examples</h3>
  *
  * <pre>
- * gatk PathSeqBuildKmers  \
+ * gatk PathSeqBuildReferenceTaxonomy \
  *   --reference microbe_reference.fasta \
  *   --output taxonomy.db \
  *   --refseq-catalog RefSeq-releaseXX.catalog.gz \
@@ -122,7 +122,7 @@ public class PathSeqBuildReferenceTaxonomy extends CommandLineProgram {
     public Object doWork() {
 
         if (refseqCatalogPath == null && genbankCatalogPath == null) {
-            throw new UserException.BadInput("At least one of --refseqCatalogPath or --genbankCatalogPath must be specified");
+            throw new UserException.BadInput("At least one of --refseq-catalog or --genbank-catalog must be specified");
         }
 
         logger.info("Parsing reference and files... (this may take a few minutes)");

@@ -1,22 +1,15 @@
 package org.broadinstitute.hellbender.tools.spark;
 
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.spark.api.java.JavaSparkContext;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
-import org.broadinstitute.hellbender.engine.spark.SparkContextFactory;
-import org.broadinstitute.hellbender.engine.spark.datasources.ReadsSparkSource;
-import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
-import org.broadinstitute.hellbender.utils.test.MiniClusterUtils;
-import org.testng.Assert;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.List;
 
 /**
  * Integration tests for {@link PileupSpark}.
@@ -50,6 +43,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
         args.add("-L 20:9999900-10000000");
         if (useShuffle) {
             args.add("--shuffle");
+            args.add("--num-reducers").add("1");
         }
         this.runCommandLine(args.getArgsArray());
         File expected = new File(TEST_DATA_DIR, "expectedSimplePileup.txt");
@@ -70,6 +64,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
         args.add("-verbose");
         if (useShuffle) {
             args.add("--shuffle");
+            args.add("--num-reducers").add("1");
         }
         this.runCommandLine(args.getArgsArray());
         File expected = new File(TEST_DATA_DIR, "expectedVerbosePileup.txt");
@@ -90,6 +85,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
         args.add("-metadata " + dbsnp_138_b37_20_21_vcf);
         if (useShuffle) {
             args.add("--shuffle");
+            args.add("--num-reducers").add("1");
         }
         this.runCommandLine(args.getArgsArray());
         File expected = new File(TEST_DATA_DIR, "expectedFeaturesPileup.txt");
@@ -110,6 +106,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
         args.add("--output-insert-length");
         if (useShuffle) {
             args.add("--shuffle");
+            args.add("--num-reducers").add("1");
         }
         this.runCommandLine(args.getArgsArray());
         File expected = new File(TEST_DATA_DIR, "expectedInsertLengthPileup.txt");
@@ -138,6 +135,7 @@ public final class PileupSparkIntegrationTest extends CommandLineProgramTest {
             args.add("-metadata " + vcfPath.toString());
             if (useShuffle) {
                 args.add("--shuffle");
+                args.add("--num-reducers").add("1");
             }
             this.runCommandLine(args.getArgsArray());
             File expected = new File(TEST_DATA_DIR, "expectedFeaturesPileup.txt");

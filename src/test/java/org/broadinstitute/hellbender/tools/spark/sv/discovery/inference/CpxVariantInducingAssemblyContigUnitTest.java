@@ -3,9 +3,10 @@ package org.broadinstitute.hellbender.tools.spark.sv.discovery.inference;
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
+import org.apache.commons.collections4.CollectionUtils;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.SVTestUtils;
+import org.broadinstitute.hellbender.tools.spark.sv.discovery.TestUtilsForAssemblyBasedSVDiscovery;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignedContig;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignmentInterval;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
@@ -15,11 +16,9 @@ import org.testng.annotations.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
-import static org.broadinstitute.hellbender.tools.spark.sv.discovery.inference.CpxSVInferenceTestUtils.bareBoneHg38SAMSeqDict;
+import static org.broadinstitute.hellbender.tools.spark.sv.discovery.TestUtilsForAssemblyBasedSVDiscovery.bareBoneHg38SAMSeqDict;
 
 public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
     @DataProvider(name = "forBasicInfoCtor")
@@ -30,7 +29,7 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
                               null, GATKException.class
         });
 
-        for (final CpxSVInferenceTestUtils.PreprocessedAndAnalysisReadyContigWithExpectedResults x : CpxSVInferenceTestUtils.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
+        for (final TestUtilsCpxVariantInference.PreprocessedAndAnalysisReadyContigWithExpectedResults x : TestUtilsCpxVariantInference.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
 
             data.add(new Object[]{x.expectedCpxVariantInducingAssemblyContig.getPreprocessedTig().getSourceContig(),
                                   x.expectedCpxVariantInducingAssemblyContig.getBasicInfo(),
@@ -59,13 +58,13 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
     private Object[][] forJumpCtor() {
         final List<Object[]> data = new ArrayList<>(20);
 
-        data.add(new Object[]{SVTestUtils.fromSAMRecordString("asm025517:tig00006\t2048\tchr17\t82596440\t60\t109M142H\t*\t0\t0\tAGCCTCAGAGGTGGCGTCAGGACGTGCCTGCCCCACCGGTTGCCCTGGTGCCCTCGTCACGCCCCGGGACCGTGCACACGTGGGGACTGTTTCCAGACGCACTTTCTGC\t*\tSA:Z:chr17,82596480,+,106S145M,60,0;\tMD:Z:72C36\tRG:Z:GATKSVContigAlignments\tNM:i:1\tAS:i:104\tXS:i:19", true),
-                              SVTestUtils.fromSAMRecordString("asm025517:tig00006\t0\tchr17\t82596480\t60\t106S145M\t*\t0\t0\tAGCCTCAGAGGTGGCGTCAGGACGTGCCTGCCCCACCGGTTGCCCTGGTGCCCTCGTCACGCCCCGGGACCGTGCACACGTGGGGACTGTTTCCAGACGCACTTTCTGCCCTGGTGCCCTCGTCACGCCCCGGGACCGCGCACACGTGGGGACTGTTTCCAGACGCACTTTCTGCGGGCAGTCTGTGTGGCAGGGCTCCCTGCCCAGCTCCTGCAGCCTCATCAAGTCTCCCACTAAGGAGGTGTCGCTCC\t*\tSA:Z:chr17,82596440,+,109M142S,60,1;\tMD:Z:145\tRG:Z:GATKSVContigAlignments\tNM:i:0\tAS:i:145\tXS:i:20", true),
+        data.add(new Object[]{TestUtilsForAssemblyBasedSVDiscovery.fromSAMRecordString("asm025517:tig00006\t2048\tchr17\t82596440\t60\t109M142H\t*\t0\t0\tAGCCTCAGAGGTGGCGTCAGGACGTGCCTGCCCCACCGGTTGCCCTGGTGCCCTCGTCACGCCCCGGGACCGTGCACACGTGGGGACTGTTTCCAGACGCACTTTCTGC\t*\tSA:Z:chr17,82596480,+,106S145M,60,0;\tMD:Z:72C36\tRG:Z:GATKSVContigAlignments\tNM:i:1\tAS:i:104\tXS:i:19", true),
+                              TestUtilsForAssemblyBasedSVDiscovery.fromSAMRecordString("asm025517:tig00006\t0\tchr17\t82596480\t60\t106S145M\t*\t0\t0\tAGCCTCAGAGGTGGCGTCAGGACGTGCCTGCCCCACCGGTTGCCCTGGTGCCCTCGTCACGCCCCGGGACCGTGCACACGTGGGGACTGTTTCCAGACGCACTTTCTGCCCTGGTGCCCTCGTCACGCCCCGGGACCGCGCACACGTGGGGACTGTTTCCAGACGCACTTTCTGCGGGCAGTCTGTGTGGCAGGGCTCCCTGCCCAGCTCCTGCAGCCTCATCAAGTCTCCCACTAAGGAGGTGTCGCTCC\t*\tSA:Z:chr17,82596440,+,109M142S,60,1;\tMD:Z:145\tRG:Z:GATKSVContigAlignments\tNM:i:0\tAS:i:145\tXS:i:20", true),
                               null,
                               IllegalArgumentException.class
         });
 
-        for (final CpxSVInferenceTestUtils.PreprocessedAndAnalysisReadyContigWithExpectedResults x : CpxSVInferenceTestUtils.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
+        for (final TestUtilsCpxVariantInference.PreprocessedAndAnalysisReadyContigWithExpectedResults x : TestUtilsCpxVariantInference.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
             final CpxVariantInducingAssemblyContig expectedCpxVariantInducingAssemblyContig = x.expectedCpxVariantInducingAssemblyContig;
             final List<AlignmentInterval> selectedAlignments = expectedCpxVariantInducingAssemblyContig.getPreprocessedTig().getAlignments();
             for (int i = 0; i < selectedAlignments.size() - 1; ++i) {
@@ -94,7 +93,7 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
     @DataProvider(name = "forSerialization")
     private Object[][] forSerialization() {
         final List<Object[]> data = new ArrayList<>(20);
-        for (final CpxSVInferenceTestUtils.PreprocessedAndAnalysisReadyContigWithExpectedResults x : CpxSVInferenceTestUtils.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
+        for (final TestUtilsCpxVariantInference.PreprocessedAndAnalysisReadyContigWithExpectedResults x : TestUtilsCpxVariantInference.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
             data.add(new Object[]{x.expectedCpxVariantInducingAssemblyContig});
         }
         return data.toArray(new Object[data.size()][]);
@@ -113,6 +112,7 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
         @SuppressWarnings("unchecked")
         final CpxVariantInducingAssemblyContig roundTrip = (CpxVariantInducingAssemblyContig) kryo.readClassAndObject(in);
         Assert.assertEquals(cpxVariantInducingAssemblyContig, roundTrip);
+        Assert.assertEquals(cpxVariantInducingAssemblyContig.hashCode(), roundTrip.hashCode());
     }
 
     // =================================================================================================================
@@ -121,7 +121,7 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
     private Object[][] forExtractJumpsOnReference() {
         final List<Object[]> data = new ArrayList<>(20);
 
-        for (final CpxSVInferenceTestUtils.PreprocessedAndAnalysisReadyContigWithExpectedResults x : CpxSVInferenceTestUtils.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
+        for (final TestUtilsCpxVariantInference.PreprocessedAndAnalysisReadyContigWithExpectedResults x : TestUtilsCpxVariantInference.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
             final CpxVariantInducingAssemblyContig expectedCpxVariantInducingAssemblyContig = x.expectedCpxVariantInducingAssemblyContig;
             final List<AlignmentInterval> selectedAlignments = expectedCpxVariantInducingAssemblyContig.getPreprocessedTig().getAlignments();
             data.add(new Object[]{selectedAlignments, expectedCpxVariantInducingAssemblyContig.getJumps()});
@@ -141,7 +141,7 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
     private Object[][] forExtractSegmentingRefLocationsOnEventPrimaryChromosome() {
         final List<Object[]> data = new ArrayList<>(20);
 
-        for (final CpxSVInferenceTestUtils.PreprocessedAndAnalysisReadyContigWithExpectedResults x : CpxSVInferenceTestUtils.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
+        for (final TestUtilsCpxVariantInference.PreprocessedAndAnalysisReadyContigWithExpectedResults x : TestUtilsCpxVariantInference.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
             final CpxVariantInducingAssemblyContig expectedCpxVariantInducingAssemblyContig = x.expectedCpxVariantInducingAssemblyContig;
             final List<CpxVariantInducingAssemblyContig.Jump> jumps = expectedCpxVariantInducingAssemblyContig.getJumps();
             final CpxVariantInducingAssemblyContig.BasicInfo basicInfo = expectedCpxVariantInducingAssemblyContig.getBasicInfo();
@@ -159,5 +159,24 @@ public class CpxVariantInducingAssemblyContigUnitTest extends GATKBaseTest {
                 CpxVariantInducingAssemblyContig.extractSegmentingRefLocationsOnEventPrimaryChromosome(jumps, basicInfo,
                         bareBoneHg38SAMSeqDict);
         Assert.assertEquals(result, expectedResults);
+    }
+
+    // =================================================================================================================
+    @DataProvider(name = "forGetAlignmentsBoundedBySegmentingLocations")
+    private Object[][] forGetAlignmentsBoundedBySegmentingLocations() {
+        final List<Object[]> data = new ArrayList<>(20);
+        for (final TestUtilsCpxVariantInference.PreprocessedAndAnalysisReadyContigWithExpectedResults x : TestUtilsCpxVariantInference.PREPROCESSED_AND_ANALYSIS_READY_CONTIGS_AND_EXPECTED_RESULTS) {
+            final CpxVariantInducingAssemblyContig expectedCpxVariantInducingAssemblyContig = x.expectedCpxVariantInducingAssemblyContig;
+            final Set<SimpleInterval> expectedTwoBaseBoundaries = x.expectedTwoBaseBoundaries;
+            data.add(new Object[]{expectedCpxVariantInducingAssemblyContig, expectedTwoBaseBoundaries});
+        }
+        return data.toArray(new Object[data.size()][]);
+    }
+
+    @Test(groups = "sv", dataProvider = "forGetAlignmentsBoundedBySegmentingLocations")
+    public void testGetAlignmentsBoundedBySegmentingLocations(final CpxVariantInducingAssemblyContig cpxVariantInducingAssemblyContig,
+                                                              final Set<SimpleInterval> expectedAlignmentsBoundedBySegmentingLocations) {
+        Assert.assertTrue(CollectionUtils.isEqualCollection(cpxVariantInducingAssemblyContig.getTwoBaseBoundaries(),
+                                                            expectedAlignmentsBoundedBySegmentingLocations));
     }
 }

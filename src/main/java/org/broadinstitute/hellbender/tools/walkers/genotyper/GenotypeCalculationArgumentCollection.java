@@ -1,7 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.genotyper;
 
+import htsjdk.variant.variantcontext.VariantContext;
 import org.broadinstitute.barclay.argparser.Advanced;
 import org.broadinstitute.barclay.argparser.Argument;
+import org.broadinstitute.hellbender.engine.FeatureInput;
+import org.broadinstitute.hellbender.tools.walkers.variantutils.CalculateGenotypePosteriors;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 
@@ -12,6 +15,10 @@ import java.util.List;
 
 public final class GenotypeCalculationArgumentCollection implements Serializable {
     private static final long serialVersionUID = 1L;
+
+    public static final String SUPPORTING_CALLSET_LONG_NAME = "population-callset";
+    public static final String SUPPORTING_CALLSET_SHORT_NAME = "population";
+    public static final String NUM_REF_SAMPLES_LONG_NAME = "num-reference-samples-if-no-call";
 
     /**
      * Creates a GenotypeCalculationArgumentCollection with default values.
@@ -34,6 +41,8 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
         this.MAX_ALTERNATE_ALLELES = other.MAX_ALTERNATE_ALLELES;
         this.inputPrior = new ArrayList<>(other.inputPrior);
         this.samplePloidy = other.samplePloidy;
+        this.supportVariants = other.supportVariants;
+        this.numRefIfMissing = other.numRefIfMissing;
     }
 
     /**
@@ -90,7 +99,7 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
      * The standard deviation of the distribution of alt allele fractions.  The above heterozygosity parameters give the
      * *mean* of this distribution; this parameter gives its spread.
      */
-    @Argument(fullName = "heterozygosity-stdev", doc = "Standard deviation of eterozygosity for SNP and indel calling.", optional = true)
+    @Argument(fullName = "heterozygosity-stdev", doc = "Standard deviation of heterozygosity for SNP and indel calling.", optional = true)
     public double heterozygosityStandardDeviation = 0.01;
 
     /**
@@ -153,16 +162,32 @@ public final class GenotypeCalculationArgumentCollection implements Serializable
      * f) If user-defined values add to more than one, an error will be produced.
      *
      * If user wants completely flat priors, then user should specify the same value (=1/(2*N+1)) 2*N times,e.g.
-     *   -inputPrior 0.33 -inputPrior 0.33
+     *   --input-prior 0.33 --input-prior 0.33
      * for the single-sample diploid case.
      */
     @Advanced
     @Argument(fullName = "input-prior",  doc = "Input prior for calls", optional = true)
-    public List<Double> inputPrior = Collections.emptyList();
+    public List<Double> inputPrior = new ArrayList<>();
 
     /**
      *   Sample ploidy - equivalent to number of chromosomes per pool. In pooled experiments this should be = # of samples in pool * individual sample ploidy
      */
     @Argument(shortName="ploidy", fullName="sample-ploidy", doc="Ploidy (number of chromosomes) per sample. For pooled data, set to (Number of samples in each pool * Sample Ploidy).", optional=true)
     public int samplePloidy = HomoSapiensConstants.DEFAULT_PLOIDY;
+
+    /**
+     * Supporting external panel. Allele counts from this panel (taken from AC,AN or MLEAC,AN or raw genotypes) will
+     * be used to inform the frequency distribution underlying the genotype priors. These files must be VCF 4.2 spec or later.
+     * Note that unlike CalculateGenotypePosteriors, HaplotypeCaller only allows one supporting callset.
+     */
+    @Argument(fullName=SUPPORTING_CALLSET_LONG_NAME, shortName=SUPPORTING_CALLSET_SHORT_NAME, doc="Callset to use in calculating genotype priors", optional=true)
+    public FeatureInput<VariantContext> supportVariants = null;
+
+    /**
+     * When a variant is not seen in any panel, this argument controls whether to infer (and with what effective strength)
+     * that only reference alleles were observed at that site. E.g. "If not seen in 1000Genomes, treat it as AC=0,
+     * AN=2000".
+     */
+    @Argument(fullName= NUM_REF_SAMPLES_LONG_NAME,doc="Number of hom-ref genotypes to infer at sites not present in a panel",optional=true)
+    public int numRefIfMissing = 0;
 }

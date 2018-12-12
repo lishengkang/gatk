@@ -1,6 +1,7 @@
 package org.broadinstitute.hellbender.tools.funcotator;
 
 import htsjdk.variant.variantcontext.Allele;
+import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetadata;
 
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -25,12 +26,6 @@ public interface Funcotation {
     void setFieldSerializationOverrideValue( final String fieldName, final String overrideValue );
 
     /**
-     * Converts this {@link Funcotation} to a string suitable for insertion into a VCF file.
-     * @return a {@link String} representing this {@link Funcotation} suitable for insertion into a VCF file.
-     */
-    String serializeToVcfString();
-
-    /**
      * @return The name of the data source behind the {@link DataSourceFuncotationFactory} used to create this {@link Funcotation}.
      */
     String getDataSourceName();
@@ -49,6 +44,19 @@ public interface Funcotation {
     String getField(final String fieldName);
 
     /**
+     * Get the value of a field in this {@link Funcotation}.
+     * @return The {@link String} value of a field in this {@link Funcotation}.  If the field name is not present,
+     * return the default value.
+     */
+    default String getFieldOrDefault(final String fieldName, final String defaultValue){
+        if (hasField(fieldName)) {
+            return getField(fieldName);
+        } else {
+            return defaultValue;
+        }
+    }
+
+    /**
      * Override fields with values as specified by the input map (for when it comes time to serialize and write this {@link Funcotation}).
      * If the given overrides map is null, will not override any field.
      * If the given overrides map is not null and if the given {@code field} is not contained in this {@link Funcotation} then a {@link org.broadinstitute.hellbender.exceptions.UserException} will be thrown.
@@ -63,12 +71,13 @@ public interface Funcotation {
     }
 
     /**
-     * Converts this {@link Funcotation} to a string suitable for insertion into a VCF file.
-     * {@code manualAnnotationString} should be written first, followed by the inherent annotations in this {@link Funcotation}.
-     * @param manualAnnotationString A {@link String} of manually-provided annotations to add to this {@link Funcotation}.
-     * @return a {@link String} representing this {@link Funcotation} suitable for insertion into a VCF file.
+     * @return Return whether the field exists in this {@link Funcotation}.
      */
-    default String serializeToVcfString(final String manualAnnotationString) {
-        return (manualAnnotationString == null ? "" : manualAnnotationString) + serializeToVcfString();
-    }
+    boolean hasField(final String fieldName);
+
+    /**
+     * @return Metadata for this {@link Funcotation}.  Never {@code null}.  All fields in {@see getFieldNames} should be
+     * represented.
+     */
+    FuncotationMetadata getMetadata();
 }

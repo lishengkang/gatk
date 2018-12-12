@@ -8,6 +8,7 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.vcf.VCFConstants;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.tools.walkers.variantutils.PosteriorProbabilitiesUtils;
 import org.broadinstitute.hellbender.utils.MathUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
@@ -38,6 +39,7 @@ final class HomRefBlock implements Locatable {
 
     private int end;
     private int[] minPLs = null;
+    private int[] minPPs = null;
 
     /**
      * Create a new HomRefBlock
@@ -83,10 +85,14 @@ final class HomRefBlock implements Locatable {
         gb.noAD().noPL().noAttributes(); // clear all attributes
 
         final int[] minPLs = getMinPLs();
+        final int[] minPPs = getMinPPs();
         gb.PL(minPLs);
-        gb.GQ(GATKVariantContextUtils.calculateGQFromPLs(minPLs));
+        gb.GQ(GATKVariantContextUtils.calculateGQFromPLs(minPPs != null? minPPs : minPLs));
         gb.DP(getMedianDP());
         gb.attribute(GATKVCFConstants.MIN_DP_FORMAT_KEY, getMinDP());
+        if (minPPs != null) {
+            gb.attribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY, Utils.listFromPrimitives(minPPs));
+        }
 
         return gb.make();
     }
@@ -100,6 +106,17 @@ final class HomRefBlock implements Locatable {
      * @param genotype A non-null Genotype with GQ and DP attributes
      */
     public void add(final int pos, final Genotype genotype) {
+        add(pos, pos, genotype);
+    }
+
+    /**
+     * Add a homRef block to the current block
+     *
+     * @param pos current genomic position
+     * @param newEnd new calculated block end position
+     * @param genotype A non-null Genotype with GQ and DP attributes
+     */
+    public void add(final int pos, final int newEnd, final Genotype genotype) {
         Utils.nonNull(genotype, "genotype cannot be null");
         if ( ! genotype.hasPL() ) { throw new IllegalArgumentException("genotype must have PL field");}
         if ( pos != end + 1 ) { throw new IllegalArgumentException("adding genotype at pos " + pos + " isn't contiguous with previous end " + end); }
@@ -112,7 +129,8 @@ final class HomRefBlock implements Locatable {
 
         if( minPLs == null ) {
             minPLs = genotype.getPL();
-        } else { // otherwise take the min with the provided genotype's PLs
+        }
+        else { // otherwise take the min with the provided genotype's PLs
             final int[] pls = genotype.getPL();
             if (pls.length != minPLs.length) {
                 throw new GATKException("trying to merge different PL array sizes: " + pls.length + " != " + minPLs.length);
@@ -121,7 +139,23 @@ final class HomRefBlock implements Locatable {
                 minPLs[i] = Math.min(minPLs[i], pls[i]);
             }
         }
-        end = pos;
+
+        if( genotype.hasExtendedAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY)) {
+            if (minPPs == null ) {
+                minPPs = PosteriorProbabilitiesUtils.parsePosteriorsIntoPhredSpace(genotype);
+            }
+            else { // otherwise take the min with the provided genotype's PLs
+                final int[] pps = PosteriorProbabilitiesUtils.parsePosteriorsIntoPhredSpace(genotype);
+                if (pps.length != minPPs.length) {
+                    throw new GATKException("trying to merge different PP array sizes: " + pps.length + " != " + minPPs.length);
+                }
+                for (int i = 0; i < pps.length; i++) {
+                    minPPs[i] = Math.min(minPPs[i], pps[i]);
+                }
+            }
+        }
+
+        end = newEnd;
         DPs.add(Math.max(genotype.getDP(), 0)); // DP must be >= 0
     }
 
@@ -150,6 +184,11 @@ final class HomRefBlock implements Locatable {
         return minPLs;
     }
 
+    /** Get the min PPs observed within this band, can be null if no PPs have yet been observed */
+    public int[] getMinPPs() {
+        return minPPs;
+    }
+
     int getGQUpperBound() {
         return maxGQ;
     }
@@ -158,7 +197,7 @@ final class HomRefBlock implements Locatable {
     }
 
     public boolean isContiguous(final VariantContext vc) {
-        return (vc.getEnd() == getEnd() + 1) && startingVC.getContig().equals(vc.getContig());
+        return (vc.getStart() == getEnd() + 1) && startingVC.getContig().equals(vc.getContig());
     }
 
     public VariantContext getStartingVC() {

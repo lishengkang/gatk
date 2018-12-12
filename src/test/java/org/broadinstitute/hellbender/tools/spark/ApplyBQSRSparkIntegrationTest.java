@@ -4,9 +4,9 @@ import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.SamAssertionUtils;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.SamAssertionUtils;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -135,7 +135,7 @@ public final class ApplyBQSRSparkIntegrationTest extends CommandLineProgramTest 
         String args = " -I " + hiSeqBam +
                 " --" + StandardArgumentDefinitions.BQSR_TABLE_LONG_NAME + " " + resourceDir + "HiSeq.1mb.1RG.highMaxCycle.table.gz" +
                 "" +
-                " -O " + createTempFile("ignore",".me");
+                " -O " + createTempFile("ignore",".bam");
         ArgumentsBuilder ab = new ArgumentsBuilder().add(args);
         IntegrationTestSpec spec = new IntegrationTestSpec(
                 ab.getString() ,

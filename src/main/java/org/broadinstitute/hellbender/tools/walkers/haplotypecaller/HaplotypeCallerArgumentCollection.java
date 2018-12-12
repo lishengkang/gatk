@@ -7,15 +7,10 @@ import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.Hidden;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.DbsnpArgumentCollection;
-import org.broadinstitute.hellbender.cmdline.GATKPlugin.DefaultGATKVariantAnnotationArgumentCollection;
-import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKAnnotationArgumentCollection;
 import org.broadinstitute.hellbender.engine.FeatureInput;
-import org.broadinstitute.hellbender.tools.walkers.annotator.StandardAnnotation;
-import org.broadinstitute.hellbender.tools.walkers.annotator.StandardHCAnnotation;
 
 import java.io.Serializable;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -25,16 +20,10 @@ import java.util.List;
 public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgumentCollection implements Serializable{
     private static final long serialVersionUID = 1L;
 
-    /**
-     * When HaplotypeCaller is run with -ERC GVCF or -ERC BP_RESOLUTION, some annotations are excluded from the
-     * output by default because they will only be meaningful once they have been recalculated by GenotypeGVCFs. As
-     * of version 3.3 this concerns ChromosomeCounts, FisherStrand, StrandOddsRatio and QualByDepth.
-     */
-    @ArgumentCollection
-    public GATKAnnotationArgumentCollection defaultGATKVariantAnnotationArgumentCollection = new DefaultGATKVariantAnnotationArgumentCollection(
-            Arrays.asList(StandardAnnotation.class.getSimpleName(), StandardHCAnnotation.class.getSimpleName()),
-            Collections.emptyList(),
-            Collections.emptyList());
+    public static final String MAX_MNP_DISTANCE_LONG_NAME = "max-mnp-distance";
+    public static final String MAX_MNP_DISTANCE_SHORT_NAME = "mnp-dist";
+    public static final String GQ_BAND_LONG_NAME = "gvcf-gq-bands";
+    public static final String GQ_BAND_SHORT_NAME = "GQB";
 
     /**
      * You can use this argument to specify that HC should process a single sample out of a multisample BAM file. This
@@ -62,11 +51,11 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
      */
     @Advanced
     @Argument(fullName = "comp", shortName = "comp", doc = "Comparison VCF file(s)", optional = true)
-    public List<FeatureInput<VariantContext>> comps = Collections.emptyList();
+    public List<FeatureInput<VariantContext>> comps = new ArrayList<>();
 
     /**
      * The reference confidence mode makes it possible to emit a per-bp or summarized confidence estimate for a site being strictly homozygous-reference.
-     * See http://www.broadinstitute.org/gatk/guide/article?id=2940 for more details of how this works.
+     * See https://software.broadinstitute.org/gatk/documentation/article.php?id=4017 for more details of how this works.
      */
     @Advanced
     @Argument(fullName="emit-ref-confidence", shortName="ERC", doc="Mode for emitting reference confidence scores", optional = true)
@@ -86,7 +75,7 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
      * and end at 100 (exclusive).
      */
     @Advanced
-    @Argument(fullName = "gvcf-gq-bands", shortName = "GQB", doc= "Exclusive upper bounds for reference confidence GQ bands " +
+    @Argument(fullName = GQ_BAND_LONG_NAME, shortName = GQ_BAND_SHORT_NAME, doc= "Exclusive upper bounds for reference confidence GQ bands " +
             "(must be in [1, 100] and specified in increasing order)", optional = true)
     public List<Integer> GVCFGQBands = new ArrayList<>(70);
     {
@@ -116,7 +105,7 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
      * If set, certain "early exit" optimizations in HaplotypeCaller, which aim to save compute and time by skipping
      * calculations if an ActiveRegion is determined to contain no variants, will be disabled. This is most likely to be useful if
      * you're using the -bamout argument to examine the placement of reads following reassembly and are interested in seeing the mapping of
-     * reads in regions with no variations. Setting the -forceActive and -dontTrimActiveRegions flags may also be necessary.
+     * reads in regions with no variations. Setting the --force-active and --dont-trim-active-regions flags may also be necessary.
      */
     @Advanced
     @Argument(fullName = "disable-optimizations", doc="Don't skip calculations in ActiveRegions with no variants",
@@ -140,4 +129,13 @@ public class HaplotypeCallerArgumentCollection extends AssemblyBasedCallerArgume
     @Hidden
     @Argument(fullName = "dont-genotype", doc = "Perform assembly but do not genotype variants", optional = true)
     public boolean dontGenotype = false;
+
+    /**
+     * Two or more phased substitutions separated by this distance or less are merged into MNPs.
+     */
+    @Advanced
+    @Argument(fullName = MAX_MNP_DISTANCE_LONG_NAME, shortName = MAX_MNP_DISTANCE_SHORT_NAME,
+            doc = "Two or more phased substitutions separated by this distance or less are merged into MNPs. " +
+            "WARNING: When used in GVCF mode, resulting GVCFs cannot be joint-genotyped.", optional = true)
+    public int maxMnpDistance = 0;
 }

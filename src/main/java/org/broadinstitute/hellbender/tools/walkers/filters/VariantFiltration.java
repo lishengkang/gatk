@@ -50,15 +50,49 @@ import static java.util.Collections.singleton;
  *   -R reference.fasta \
  *   -V input.vcf.gz \
  *   -O output.vcf.gz \
- *   --filterExpression "AB < 0.2 || MQ0 > 50" \
- *   --filterName "my_filters"
+ *   --filter-name "my_filter1" \
+ *   --filter-expression "AB < 0.2" \
+ *   --filter-name "my_filter2" \
+ *   --filter-expression "MQ0 > 50"
  * </pre>
  *
  * <h3>Note</h3>
- * <p>Composing filtering expressions can range from very simple to extremely complicated depending on what you're
- * trying to do. Please see <a href='https://software.broadinstitute.org/gatk/documentation/article.php?id=1255'>this
- * document</a> for more details on how to compose and use filtering expressions effectively.</p>
+ * <p>
+ * Composing filtering expressions can range from very simple to extremely complicated depending on what you're
+ * trying to do.
+ * <p>
+ * Compound expressions (ones that specify multiple conditions connected by &&, AND, ||, or OR, and reference
+ * multiple attributes) require special consideration. By default, variants that are missing one or more of the
+ * attributes referenced in a compound expression are treated as PASS for the entire expression, even if the variant
+ * would satisfy the filter criteria for another part of the expression. This can lead to unexpected results if any
+ * of the attributes referenced in a compound expression are present for some variants, but missing for others.
+ * <p>
+ * It is strongly recommended that such expressions be provided as individual arguments, each referencing a
+ * single attribute and specifying a single criteria. This ensures that all of the individual expression are
+ * applied to each variant, even if a given variant is missing values for some of the expression conditions.
+ * <p>
+ * As an example, multiple individual expressions provided like this:
+ * <pre>
+ *   gatk VariantFiltration \
+ *   -R reference.fasta \
+ *   -V input.vcf.gz \
+ *   -O output.vcf.gz \
+ *   --filter-name "my_filter1" \
+ *   --filter-expression "AB < 0.2" \
+ *   --filter-name "my_filter2" \
+ *   --filter-expression "MQ0 > 50"
+ * </pre>
  *
+ * are preferable to a single compound expression such as this:
+ *
+ *  <pre>
+ *    gatk VariantFiltration \
+ *    -R reference.fasta \
+ *    -V input.vcf.gz \
+ *    -O output.vcf.gz \
+ *    --filter-name "my_filter" \
+ *    --filter-expression "AB < 0.2 || MQ0 > 50"
+ *  </pre>
  */
 @CommandLineProgramProperties(
         summary = "Filter variant calls based on INFO and/or FORMAT annotations.",
@@ -78,7 +112,6 @@ public final class VariantFiltration extends VariantWalker {
     public static final String MASK_NAME_LONG_NAME = "mask-name";
     public static final String FILTER_NOT_IN_MASK_LONG_NAME = "filter-not-in-mask";
     public static final String MISSING_VAL_LONG_NAME = "missing-values-evaluate-as-failing";
-    public static final String INVALIDATE_LONG_NAME = "invalidate-previous-filters";
     public static final String INVERT_LONG_NAME = "invert-filter-expression";
     public static final String INVERT_GT_LONG_NAME = "invert-genotype-filter-expression";
     public static final String NO_CALL_GTS_LONG_NAME = "set-filtered-genotype-to-no-call";
@@ -87,9 +120,9 @@ public final class VariantFiltration extends VariantWalker {
 
     /**
      * Any variant which overlaps entries from the provided mask file will be filtered. If the user wants logic to be reversed,
-     * i.e. filter variants that do not overlap with provided mask, then argument -filterNotInMask can be used.
+     * i.e. filter variants that do not overlap with provided mask, then argument --filter-not-in-mask can be used.
      * Note that it is up to the user to adapt the name of the mask to make it clear that the reverse logic was used
-     * (e.g. if masking against Hapmap, use -maskName=hapmap for the normal masking and -maskName=not_hapmap for the reverse masking).
+     * (e.g. if masking against Hapmap, use --mask-name=hapmap for the normal masking and --mask-name=not_hapmap for the reverse masking).
      */
     @Argument(fullName="mask", shortName="mask", doc="Input mask", optional=true)
     public FeatureInput<Feature> mask;
@@ -99,9 +132,12 @@ public final class VariantFiltration extends VariantWalker {
 
     /**
      * VariantFiltration accepts any number of JEXL expressions (so you can have two named filters by using
-     * --filterName One --filterExpression "X < 1" --filterName Two --filterExpression "X > 2").
+     * --filter-name One --filter-expression "X < 1" --filter-name Two --filter-expression "X > 2").
+     *
+     * It is preferable to use multiple expressions, each specifying an individual filter criteria, to a single
+     * compound expression that specifies multiple filter criteria.
      */
-    @Argument(fullName=FILTER_EXPRESSION_LONG_NAME, shortName="filter", doc="One or more expression used with INFO fields to filter", optional=true)
+    @Argument(fullName=FILTER_EXPRESSION_LONG_NAME, shortName="filter", doc="One or more expressions used with INFO fields to filter", optional=true)
     public List<String> filterExpressions = new ArrayList<>();
 
     /**
@@ -116,8 +152,11 @@ public final class VariantFiltration extends VariantWalker {
      * One can filter normally based on most fields (e.g. "GQ < 5.0"), but the GT (genotype) field is an exception. We have put in convenience
      * methods so that one can now filter out hets ("isHet == 1"), refs ("isHomRef == 1"), or homs ("isHomVar == 1"). Also available are
      * expressions isCalled, isNoCall, isMixed, and isAvailable, in accordance with the methods of the Genotype object.
+     *
+     * It is preferable to use multiple expressions, each specifying an individual filter criteria, to a single compound expression
+     * that specifies multiple filter criteria.
      */
-    @Argument(fullName=GENOTYPE_FILTER_EXPRESSION_LONG_NAME, shortName="G-filter", doc="One or more expression used with FORMAT (sample/genotype-level) fields to filter (see documentation guide for more info)", optional=true)
+    @Argument(fullName=GENOTYPE_FILTER_EXPRESSION_LONG_NAME, shortName="G-filter", doc="One or more expressions used with FORMAT (sample/genotype-level) fields to filter (see documentation guide for more info)", optional=true)
     public List<String> genotypeFilterExpressions = new ArrayList<>();
 
     /**
@@ -142,20 +181,20 @@ public final class VariantFiltration extends VariantWalker {
     public Integer maskExtension = 0;
 
     /**
-     * When using the -mask argument, the maskName will be annotated in the variant record.
-     * Note that when using the -filter-not-in-mask argument to reverse the masking logic,
+     * When using the --mask argument, the mask-name will be annotated in the variant record.
+     * Note that when using the --filter-not-in-mask argument to reverse the masking logic,
      * it is up to the user to adapt the name of the mask to make it clear that the reverse logic was used
-     * (e.g. if masking against Hapmap, use -mask-name=hapmap for the normal masking and -mask-name=not_hapmap for the reverse masking).
+     * (e.g. if masking against Hapmap, use --mask-name=hapmap for the normal masking and --mask-name=not_hapmap for the reverse masking).
      */
     @Argument(fullName=MASK_NAME_LONG_NAME, doc="The text to put in the FILTER field if a 'mask' is provided and overlaps with a variant call", optional=true)
     public String maskName = "Mask";
 
     /**
-     * By default, if the -mask argument is used, any variant falling in a mask will be filtered.
+     * By default, if the --mask argument is used, any variant falling in a mask will be filtered.
      * If this argument is used, logic is reversed, and variants falling outside a given mask will be filtered.
      * Use case is, for example, if we have an interval list or BED file with "good" sites.
      * Note that it is up to the user to adapt the name of the mask to make it clear that the reverse logic was used
-     * (e.g. if masking against Hapmap, use -mask-name=hapmap for the normal masking and -mask-name=not_hapmap for the reverse masking).
+     * (e.g. if masking against Hapmap, use --mask-name=hapmap for the normal masking and --mask-name=not_hapmap for the reverse masking).
      */
     @Argument(fullName=FILTER_NOT_IN_MASK_LONG_NAME, doc="Filter records NOT in given input mask.", optional=true)
     public boolean filterRecordsNotInMask = false;
@@ -170,19 +209,19 @@ public final class VariantFiltration extends VariantWalker {
     /**
      * Invalidate previous filters applied to the VariantContext, applying only the filters here
      */
-    @Argument(fullName=INVALIDATE_LONG_NAME,doc="Remove previous filters applied to the VCF",optional=true)
+    @Argument(fullName=StandardArgumentDefinitions.INVALIDATE_PREVIOUS_FILTERS_LONG_NAME, doc="Remove previous filters applied to the VCF", optional=true)
     boolean invalidatePreviousFilters = false;
 
     /**
      * Invert the selection criteria for --filter-expression
      */
-    @Argument(fullName=INVERT_LONG_NAME, shortName="invfilter", doc="Invert the selection criteria for --filterExpression", optional=true)
+    @Argument(fullName=INVERT_LONG_NAME, shortName="invfilter", doc="Invert the selection criteria for --filter-expression", optional=true)
     public boolean invertFilterExpression = false;
 
     /**
      * Invert the selection criteria for --genotype-filter-expression
      */
-    @Argument(fullName=INVERT_GT_LONG_NAME, shortName="invG-filter", doc="Invert the selection criteria for --genotypeFilterExpression", optional=true)
+    @Argument(fullName=INVERT_GT_LONG_NAME, shortName="invG-filter", doc="Invert the selection criteria for --genotype-filter-expression", optional=true)
     public boolean invertGenotypeFilterExpression = false;
 
     /**
@@ -215,7 +254,7 @@ public final class VariantFiltration extends VariantWalker {
     }
 
     /**
-     * Prepend inverse phrase to description if --invertFilterExpression
+     * Prepend inverse phrase to description if --invert-filter-expression
      *
      * @param description the description
      * @return the description with inverse prepended if --invert_filter_expression

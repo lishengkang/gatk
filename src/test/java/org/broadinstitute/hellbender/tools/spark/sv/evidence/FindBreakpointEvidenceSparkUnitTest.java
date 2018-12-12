@@ -28,7 +28,7 @@ public final class FindBreakpointEvidenceSparkUnitTest extends GATKBaseTest {
     private static final SVInterval[] testIntervals =
             { new SVInterval(1, 43349482, 43350671), new SVInterval(1, 43353045, 43353870) };
 
-    private final String readsFile = largeFileTestDir + "SVIntegrationTest.bam";
+    private final String readsFile = largeFileTestDir + "/sv/SVIntegrationTest_hg19.bam";
     private final String toolDir = getToolTestDataDir();
     private final String qNamesFile = toolDir+"SVBreakpointsTest.qnames";
     private final String kmersFile = toolDir+"SVBreakpointsTest.kmers";
@@ -61,8 +61,15 @@ public final class FindBreakpointEvidenceSparkUnitTest extends GATKBaseTest {
 
     @Test(groups = "sv")
     public void getIntervalsTest() {
+        // Now that thresholds scale with coverage, changing coverage alters thresholds. Re-fix thresholds to match
+        // original test:
+        final FindBreakpointEvidenceSparkArgumentCollection intervalsParams =
+                new FindBreakpointEvidenceSparkArgumentCollection();
+        intervalsParams.minEvidenceWeightPerCoverage = 15.0 / broadcastMetadata.getValue().getCoverage();
+        intervalsParams.minCoherentEvidenceWeightPerCoverage = 7.0 / broadcastMetadata.getValue().getCoverage();
+        // run test as previously:
         final List<SVInterval> actualIntervals =
-                FindBreakpointEvidenceSpark.getIntervalsAndEvidenceTargetLinks(params,broadcastMetadata,
+                FindBreakpointEvidenceSpark.getIntervalsAndEvidenceTargetLinks(intervalsParams,broadcastMetadata,
                         broadcastExternalEvidence,header,reads,filter,logger, broadcastRegionsToIgnore)._1();
         Assert.assertEquals(actualIntervals, expectedIntervalList);
     }

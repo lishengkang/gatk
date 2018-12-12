@@ -3,7 +3,7 @@ package org.broadinstitute.hellbender.tools.walkers.bqsr;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -124,19 +124,18 @@ public final class AnalyzeCovariatesIntegrationTest extends CommandLineProgramTe
         spec.executeTest("testInOutAbsencePresence", this);
     }
 
-
-
     @DataProvider
     public Iterator<Object[]> alternativeInOutAbsenceCombinations(Method m) {
         List<Object[]> result = new LinkedList<>();
         if (m.getName().endsWith("Exception")) {
-           result.add(new Object[] { true, false, false, false ,false});
-        }
-        else {
-           result.add(new Object[] { true, false, true, false, false });
-           result.add(new Object[] { true, false, false, true, false });
-           result.add(new Object[] { true, false, false, false, true });
-           result.add(new Object[] { true, false, false, true, false });
+            result.add(new Object[] { true, false, false, false ,false});
+        } else {
+            result.add(new Object[] { true, false, true, false, false });
+            result.add(new Object[] { true, false, false, true, false });
+            result.add(new Object[] { true, false, false, false, true });
+            result.add(new Object[] { true, true, true, false, false });
+            result.add(new Object[] { true, true, false, true, false });
+            result.add(new Object[] { true, true, false, false, true });
         }
         return result.iterator();
     }

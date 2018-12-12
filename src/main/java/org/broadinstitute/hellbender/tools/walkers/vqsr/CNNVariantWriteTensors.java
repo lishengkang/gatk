@@ -7,7 +7,7 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.io.Resource;
 import org.broadinstitute.hellbender.utils.python.PythonScriptExecutor;
-import picard.cmdline.programgroups.VariantEvaluationProgramGroup;
+import picard.cmdline.programgroups.VariantFilteringProgramGroup;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,7 +28,7 @@ import java.util.List;
  *      <li>The truth BED is a bed file define the confident region for the validated calls.
  *      Variants from the input VCF inside this region, but not included in the truth VCF
  *      will be used as negative training data.</li>
- *      <li>The tensor-name argument determines what types of tensors will be written.
+ *      <li>The --tensor-type argument determines what types of tensors will be written.
  *      Set it to "reference" to write 1D tensors or "read_tensor" to write 2D tensors.</li>
  *      <li>The bam-file argument is necessary to write 2D tensors which incorporate read data.</li>
  * </ul>
@@ -49,7 +49,7 @@ import java.util.List;
  *   -V input.vcf.gz \
  *   -truth-vcf platinum-genomes.vcf \
  *   -truth-bed platinum-confident-region.bed \
- *   -tensor-name reference \
+ *   -tensor-type reference \
  *   -output-tensor-dir my-tensor-folder
  * </pre>
  *
@@ -60,7 +60,7 @@ import java.util.List;
  *   -V input.vcf.gz \
  *   -truth-vcf platinum-genomes.vcf \
  *   -truth-bed platinum-confident-region.bed \
- *   -tensor-name read_tensor \
+ *   -tensor-type read_tensor \
  *   -bam-file input.bam \
  *   -output-tensor-dir my-tensor-folder
  * </pre>
@@ -69,7 +69,7 @@ import java.util.List;
 @CommandLineProgramProperties(
         summary = "Write variant tensors for training a CNN to filter variants",
         oneLineSummary = "Write variant tensors for training a CNN to filter variants",
-        programGroup = VariantEvaluationProgramGroup.class
+        programGroup = VariantFilteringProgramGroup.class
 )
 @DocumentedFeature
 @ExperimentalFeature
@@ -100,6 +100,12 @@ public class CNNVariantWriteTensors extends CommandLineProgram {
     @Argument(fullName = "tensor-type", shortName = "tensor-type", doc = "Name of the tensors to generate.")
     private TensorType tensorType = TensorType.reference;
 
+    @Argument(fullName = "downsample-snps", shortName = "downsample-snps", doc = "Fraction of SNPs to write tensors for.", optional = true)
+    private float downsampleSnps = 0.05f;
+
+    @Argument(fullName = "downsample-indels", shortName = "downsample-indels", doc = "Fraction of INDELs to write tensors for.", optional = true)
+    private float downsampleIndels = 0.5f;
+
     @Advanced
     @Argument(fullName = "channels-last", shortName = "channels-last", doc = "Store the channels in the last axis of tensors, tensorflow->true, theano->false", optional = true)
     private boolean channelsLast = true;
@@ -121,7 +127,7 @@ public class CNNVariantWriteTensors extends CommandLineProgram {
 
     @Override
     protected Object doWork() {
-        final Resource pythonScriptResource = new Resource("training.py", FilterVariantTranches.class);
+        final Resource pythonScriptResource = new Resource("training.py", CNNVariantWriteTensors.class);
         List<String> arguments = new ArrayList<>(Arrays.asList(
                 "--reference_fasta", reference,
                 "--input_vcf", inputVcf,
@@ -131,6 +137,8 @@ public class CNNVariantWriteTensors extends CommandLineProgram {
                 "--tensor_name", tensorType.name(),
                 "--annotation_set", annotationSet,
                 "--samples", Integer.toString(maxTensors),
+                "--downsample_snps", Float.toString(downsampleSnps),
+                "--downsample_indels", Float.toString(downsampleIndels),
                 "--data_dir", outputTensorsDir));
 
         if(channelsLast){

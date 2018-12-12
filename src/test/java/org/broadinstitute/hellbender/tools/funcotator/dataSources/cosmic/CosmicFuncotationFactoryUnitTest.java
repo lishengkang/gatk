@@ -9,12 +9,12 @@ import org.broadinstitute.hellbender.engine.ReferenceContext;
 import org.broadinstitute.hellbender.engine.ReferenceDataSource;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.tools.funcotator.Funcotation;
-import org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.TableFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotationBuilder;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
+import org.broadinstitute.hellbender.testutils.FuncotatorReferenceTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -27,7 +27,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants.COSMIC_TEST_DB;
-import static org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants.PIK3CA_POSITION;
+import static org.broadinstitute.hellbender.tools.funcotator.FuncotatorTestConstants.PIK3CA_TRANSCRIPT_POSITION;
 
 /**
  * Class for running unit tests on {@link CosmicFuncotationFactory}.
@@ -46,21 +46,21 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
     private static final VariantContext defaultVariantContext;
     private static final ReferenceContext defaultReferenceContext;
 
-    private static final ReferenceDataSource PIK3CA_REF_DATA_SOURCE = ReferenceDataSource.of( new File(FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME).toPath() );
+    private static final ReferenceDataSource PIK3CA_REF_DATA_SOURCE = ReferenceDataSource.of( new File(FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref()).toPath() );
 
     static {
         final VariantContextBuilder variantContextBuilder = new VariantContextBuilder(
-                FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
-                PIK3CA_POSITION.getContig(),
-                PIK3CA_POSITION.getStart(),
-                PIK3CA_POSITION.getStart(),
+                FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
+                PIK3CA_TRANSCRIPT_POSITION.getContig(),
+                PIK3CA_TRANSCRIPT_POSITION.getStart(),
+                PIK3CA_TRANSCRIPT_POSITION.getStart(),
                 Arrays.asList(Allele.create("T", true), Allele.create("G"))
         );
         defaultVariantContext = variantContextBuilder.make();
 
         defaultReferenceContext = new ReferenceContext(
                 PIK3CA_REF_DATA_SOURCE,
-                PIK3CA_POSITION
+                PIK3CA_TRANSCRIPT_POSITION
         );
     }
 
@@ -80,7 +80,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
         final Allele altAllele = Allele.create(altString);
 
         final VariantContextBuilder variantContextBuilder = new VariantContextBuilder(
-                FuncotatorTestConstants.HG19_CHR3_REFERENCE_FILE_NAME,
+                FuncotatorReferenceTestUtils.retrieveHg19Chr3Ref(),
                 contig,
                 start,
                 end,
@@ -155,7 +155,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                 helpProvideForTestCreateFuncotations("chr3", 178916617, 178916617, "C", "A",
                         Collections.emptyList(),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("0"), Allele.create("A"), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList(""), Allele.create("A"), "Cosmic", null)
                         )
                 ),
                 // Trivial Case: Position is not in the database:
@@ -164,7 +164,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                                 new GencodeFuncotationBuilder().setHugoSymbol("PIK3CA").setChromosome("chr3").setStart(178916617).setEnd(178916617).setProteinChange("p.P2T").build()
                         ),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("0"), Allele.create("A"), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList(""), Allele.create("A"), "Cosmic", null)
                         )
                 ),
                 // Protein position match:
@@ -174,7 +174,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                                 new GencodeFuncotationBuilder().setHugoSymbol("PIK3CA").setChromosome("chr3").setStart(178936091).setEnd(178936091).setProteinChange("p.E545K").build()
                         ),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("2"), Allele.create("A"), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("p.E545K(2)"), Allele.create("A"), "Cosmic", null)
                         )
                 ),
                 // Genome position match:
@@ -183,7 +183,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                                 new GencodeFuncotationBuilder().setHugoSymbol("PIK3CA").setChromosome("chr3").setStart(178936091).setEnd(178936091).setProteinChange("p.E999K").build()
                         ),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("1"), Allele.create("A"), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("p.E545K(1)"), Allele.create("A"), "Cosmic", null)
                         )
                 ),
                 // Protein and Genome position match:
@@ -192,7 +192,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                                 new GencodeFuncotationBuilder().setHugoSymbol("PIK3CA").setChromosome("chr3").setStart(178936091).setEnd(178936091).setProteinChange("p.E545K").build()
                         ),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("2"), Allele.create("A"), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("p.E545K(2)"), Allele.create("A"), "Cosmic", null)
                         )
                 ),
                 // Huge Protein Match - all in the file:
@@ -201,7 +201,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                                 new GencodeFuncotationBuilder().setHugoSymbol("PIK3CA").setChromosome("chr3").setStart(178936091).setEnd(178936091).setProteinChange("p.E1_K3455").build()
                         ),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("7"), Allele.create("A"), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("p.E545K(2)|p.E542K(2)|p.H1047R(2)|p.N345K(1)"), Allele.create("A"), "Cosmic", null)
                         )
                 ),
                 // Huge Genome Position Match - all in the file:
@@ -212,7 +212,7 @@ public class CosmicFuncotationFactoryUnitTest extends GATKBaseTest {
                                 new GencodeFuncotationBuilder().setHugoSymbol("PIK3CA").setChromosome("chr3").setStart(178921553).setEnd(178952085).setProteinChange("p.E1T").build()
                         ),
                         Collections.singletonList(
-                                new TableFuncotation(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("5"), Allele.create(String.join("", Collections.nCopies(178952085 - 178921553 + 1, "A"))), "Cosmic")
+                                TableFuncotation.create(Collections.singletonList("Cosmic_overlapping_mutations"), Collections.singletonList("p.E542K(2)|p.H1047R(1)|p.E545K(1)|p.N345K(1)"), Allele.create(String.join("", Collections.nCopies(178952085 - 178921553 + 1, "A"))), "Cosmic", null)
                         )
                 ),
         };

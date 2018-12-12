@@ -1,26 +1,29 @@
 package org.broadinstitute.hellbender.tools.funcotator.mafOutput;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableMap;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFHeader;
 import htsjdk.variant.vcf.VCFHeaderLine;
 import org.apache.commons.lang.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.funcotator.DataSourceFuncotationFactory;
-import org.broadinstitute.hellbender.tools.funcotator.Funcotation;
-import org.broadinstitute.hellbender.tools.funcotator.Funcotator;
-import org.broadinstitute.hellbender.tools.funcotator.OutputRenderer;
+import org.broadinstitute.hellbender.tools.funcotator.*;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode.GencodeFuncotation;
+import org.broadinstitute.hellbender.tools.funcotator.metadata.SamplePairExtractor;
+import org.broadinstitute.hellbender.tools.funcotator.metadata.TumorNormalPair;
 import org.broadinstitute.hellbender.tools.funcotator.vcfOutput.VcfOutputRenderer;
 import org.broadinstitute.hellbender.utils.Utils;
 
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -42,6 +45,56 @@ public class MafOutputRenderer extends OutputRenderer {
     //==================================================================================================================
     // Private Static Members:
 
+    private static final Logger logger = LogManager.getLogger(MafOutputRenderer.class);
+
+    private static final Set<String> HG_19_CHR_SET = new HashSet<>(Arrays.asList("1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17","18","19","20","21","22","X","Y"));
+
+    private static final List<String> ORDERED_GENCODE_VARIANT_CLASSIFICATIONS = new ArrayList<> (Arrays.asList(
+            GencodeFuncotation.VariantClassification.IN_FRAME_DEL.toString(),
+            GencodeFuncotation.VariantClassification.IN_FRAME_INS.toString(),
+            GencodeFuncotation.VariantClassification.FRAME_SHIFT_INS.toString(),
+            GencodeFuncotation.VariantClassification.FRAME_SHIFT_DEL.toString(),
+            GencodeFuncotation.VariantClassification.MISSENSE.toString(),
+            GencodeFuncotation.VariantClassification.NONSENSE.toString(),
+            GencodeFuncotation.VariantClassification.SILENT.toString(),
+            GencodeFuncotation.VariantClassification.SPLICE_SITE.toString(),
+            GencodeFuncotation.VariantClassification.DE_NOVO_START_IN_FRAME.toString(),
+            GencodeFuncotation.VariantClassification.DE_NOVO_START_OUT_FRAME.toString(),
+            GencodeFuncotation.VariantClassification.START_CODON_SNP.toString(),
+            GencodeFuncotation.VariantClassification.START_CODON_INS.toString(),
+            GencodeFuncotation.VariantClassification.START_CODON_DEL.toString(),
+            GencodeFuncotation.VariantClassification.NONSTOP.toString(),
+            GencodeFuncotation.VariantClassification.FIVE_PRIME_UTR.toString(),
+            GencodeFuncotation.VariantClassification.THREE_PRIME_UTR.toString(),
+            GencodeFuncotation.VariantClassification.FIVE_PRIME_FLANK.toString(),
+            GencodeFuncotation.VariantClassification.INTRON.toString(),
+            GencodeFuncotation.VariantClassification.LINCRNA.toString()
+    ));
+    private static final List<String> ORDERED_MAF_VARIANT_CLASSIFICATIONS = new ArrayList<> (Arrays.asList(
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.IN_FRAME_DEL.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.IN_FRAME_INS.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FRAME_SHIFT_INS.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FRAME_SHIFT_DEL.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.MISSENSE.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.NONSENSE.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.SILENT.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.SPLICE_SITE.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.DE_NOVO_START_IN_FRAME.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.DE_NOVO_START_OUT_FRAME.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.START_CODON_SNP.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.START_CODON_INS.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.START_CODON_DEL.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.NONSTOP.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FIVE_PRIME_UTR.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.THREE_PRIME_UTR.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FIVE_PRIME_FLANK.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.INTRON.toString()),
+        MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.LINCRNA.toString())
+    ));
+
+    //==================================================================================================================
+    // Private Members:
+
     /**
      * Default set of columns to include in this {@link MafOutputRenderer}.
      * Order of the columns is preserved by the {@link LinkedHashMap}, while still being able to access each field via
@@ -60,9 +113,6 @@ public class MafOutputRenderer extends OutputRenderer {
      */
     private final Map<String, List<String>> outputFieldNameMap = new LinkedHashMap<>();
 
-    //==================================================================================================================
-    // Private Members:
-
     /** Flag to see if the header has been written to the output file yet. */
     private boolean hasWrittenHeader = false;
 
@@ -74,7 +124,7 @@ public class MafOutputRenderer extends OutputRenderer {
     /**
      * {@link java.io.PrintWriter} to which to write the output MAF file.
      */
-    private PrintWriter printWriter;
+    private Writer writer;
 
     /**
      * Tool header information to go into the header.
@@ -89,11 +139,21 @@ public class MafOutputRenderer extends OutputRenderer {
     /** Override annotation list from the user. */
     private final LinkedHashMap<String, String> overrideAnnotations;
 
+    /** The tumor normal pairs discovered in the input */
+    private final List<TumorNormalPair> tnPairs;
+
+    /** The version of the reference used to create annotations that will be output by this {@link MafOutputRenderer}.*/
+    private final String referenceVersion;
+
+    /** Fields that should be removed in the final MAF file. */
+    private final Set<String> excludedOutputFields;
+
     //==================================================================================================================
     // Constructors:
 
     /**
-     * Create a {@link MafOutputRenderer}.
+     * Create a {@link MafOutputRenderer}.  Usage for germline use cases is unsupported.
+     *
      * @param outputFilePath {@link Path} to output file (must not be null).
      * @param dataSources {@link List} of {@link DataSourceFuncotationFactory} to back our annotations (must not be null).
      * @param inputFileHeader {@link VCFHeader} of input VCF file to preserve.
@@ -106,13 +166,27 @@ public class MafOutputRenderer extends OutputRenderer {
                              final VCFHeader inputFileHeader,
                              final LinkedHashMap<String, String> unaccountedForDefaultAnnotations,
                              final LinkedHashMap<String, String> unaccountedForOverrideAnnotations,
-                             final Set<String> toolHeaderLines) {
+                             final Set<String> toolHeaderLines,
+                             final String referenceVersion, final Set<String> excludedOutputFields) {
 
         // Set our internal variables from the input:
         this.outputFilePath = outputFilePath;
         this.toolHeaderLines = new LinkedHashSet<>(toolHeaderLines);
         this.inputFileHeader = inputFileHeader;
-        dataSourceFactories = dataSources;
+        this.dataSourceFactories = dataSources;
+        this.referenceVersion = referenceVersion;
+
+        this.tnPairs = SamplePairExtractor.extractPossibleTumorNormalPairs(this.inputFileHeader);
+        if (tnPairs.size() == 0) {
+            logger.warn("No tumor/normal pairs were seen, cannot populate the some of the MAF fields (e.g. t_alt_count).  Please add '##tumor_sample=<tumor_sample_name>' and (if applicable) '##normal_sample=<normal_sample_name>' to the input VCF header");
+        }
+
+        // TODO: Make this check unnecessary and use the contained information to populate the MAF entries correctly.  (https://github.com/broadinstitute/gatk/issues/4912)
+        if (this.tnPairs.size() > 1) {
+            throw new UserException.BadInput("Input files with more than one tumor normal pair are currently not supported.  Found: " + tnPairs.stream()
+                    .map(tn -> tn.toString())
+                    .collect(Collectors.joining("; ")) );
+        }
 
         // Merge the default annotations into our manualAnnotations:
         manualAnnotations = new LinkedHashMap<>();
@@ -183,16 +257,15 @@ public class MafOutputRenderer extends OutputRenderer {
         defaultMap.put(MafOutputRendererConstants.FieldName_Score, MafOutputRendererConstants.UNUSED_STRING);
         defaultMap.put(MafOutputRendererConstants.FieldName_BAM_File, MafOutputRendererConstants.UNUSED_STRING);
 
-        // Cache the manual annotation string so we can pass it easily into any Funcotations:
-        manualAnnotationSerializedString = (manualAnnotations.size() != 0 ? MafOutputRendererConstants.FIELD_DELIMITER + String.join( MafOutputRendererConstants.FIELD_DELIMITER, manualAnnotations.values() ) + MafOutputRendererConstants.FIELD_DELIMITER : "");
-
         // Open the output object:
         try {
-            printWriter = new PrintWriter(Files.newOutputStream(outputFilePath));
+            writer = new BufferedWriter(new OutputStreamWriter(Files.newOutputStream(outputFilePath)));
         }
         catch (final IOException ex) {
             throw new UserException("Error opening output file path: " + outputFilePath.toUri().toString(), ex);
         }
+
+        this.excludedOutputFields = excludedOutputFields;
     }
 
     //==================================================================================================================
@@ -200,65 +273,122 @@ public class MafOutputRenderer extends OutputRenderer {
 
     @Override
     public void close() {
-        if ( printWriter != null ) {
-            printWriter.flush();
-            printWriter.close();
+        if (!hasWrittenHeader) {
+            // The alt allele can be anything here.  We just need to write the header, not any actual funcotations.
+            final String dummyAltAllele = "AT";
+            final LinkedHashMap<String, String> dummyMafCompliantOutputMap = createMafCompliantOutputMap(Allele.create(dummyAltAllele), Collections.emptyList());
+            writeHeader(new ArrayList<>(dummyMafCompliantOutputMap.keySet()));
+        }
+        if ( writer != null ) {
+            try {
+                writer.flush();
+                writer.close();
+            } catch (IOException e){
+                throw new UserException.CouldNotCreateOutputFile("Failed while closing the maf writer, the output may be corrupted.", e);
+            }
         }
     }
 
     @Override
-    public void write(final VariantContext variant, final List<Funcotation> funcotations) {
+    public void write(final VariantContext variant, final FuncotationMap txToFuncotationMap) {
+
+        if (txToFuncotationMap.getTranscriptList().size() > 1) {
+            logger.warn("MAF typically does not support multiple transcripts per variant, though this should be able to render (grouped by transcript).  No user action needed.");
+        }
+
+        // Add the generated count funcotations necessary for a MAF output rendering.
+        final List<Funcotation> customMafCountFuncotations = CustomMafFuncotationCreator.createCustomMafCountFields(variant, tnPairs);
+        txToFuncotationMap.getTranscriptList().forEach(txId -> txToFuncotationMap.add(txId, customMafCountFuncotations));
+
+        // Add the custom dbSNP funcotations (e.g. dbSNP validation field) to populate the MAF correctly
+        for (final String txId : txToFuncotationMap.getTranscriptList()) {
+            final List<Funcotation> customDbSnpFuncotations = CustomMafFuncotationCreator.createCustomMafDbSnpFields(txToFuncotationMap.get(txId));
+            if (customDbSnpFuncotations.size() == 0) {
+                logger.warn("No dbSNP annotations exist for this variant.  Cannot render the dbSNP fields in the MAF.  These fields will not be correct.  " + variant);
+            } else {
+                txToFuncotationMap.add(txId, customDbSnpFuncotations);
+            }
+        }
 
         // Loop through each alt allele in our variant:
         for ( final Allele altAllele : variant.getAlternateAlleles() ) {
 
-            // Create our output maps:
-            final LinkedHashMap<String, Object> outputMap = new LinkedHashMap<>(defaultMap);
-            final LinkedHashMap<String, Object> extraFieldOutputMap = new LinkedHashMap<>();
+            // Ignore spanning deletions.  Those have no meaning in a MAF.
+            if (altAllele.equals(Allele.SPAN_DEL)) {
+                continue;
+            }
 
-            // Get our funcotations for this allele and add them to the output maps:
-            for ( final Funcotation funcotation : funcotations ) {
-                if ( funcotation.getAltAllele().equals(altAllele) ) {
-                    // Add all the fields from the other funcotations into the extra field output:
-                    for ( final String field : funcotation.getFieldNames() ) {
-                        setField(extraFieldOutputMap, field, funcotation.getField(field));
+            for (final String txId : txToFuncotationMap.getTranscriptList()) {
+
+                final List<Funcotation> funcotations = txToFuncotationMap.get(txId);
+                final LinkedHashMap<String, String> mafCompliantOutputMap = createMafCompliantOutputMap(altAllele, funcotations);
+
+                // Write our header if we have to:
+                if (!hasWrittenHeader) {
+                    // Please note that we are implicitly using the ordering of a LinkedHashMap under the hood.
+                    writeHeader(new ArrayList<>(mafCompliantOutputMap.keySet()));
+                }
+
+                try {
+                    // Write the output (with manual annotations at the end):
+                    for (final Map.Entry<String, String> entry : mafCompliantOutputMap.entrySet()) {
+                        writeString(entry.getValue());
+                        writeString(MafOutputRendererConstants.FIELD_DELIMITER);
                     }
+                    writeLine("");
+                } catch (IOException e){
+                    throw new UserException.CouldNotCreateOutputFile("Error while writing maf file, cause by: " + e.getMessage(), e);
                 }
             }
-
-            // Now add in our annotation overrides so they can be aliased correctly with the outputFieldNameMap:
-            extraFieldOutputMap.putAll(overrideAnnotations);
-
-            // Go through all output fields and see if any of the names in the value list are in our extraFieldOutputMap.
-            // For any that match, we remove them from our extraFieldOutputMap and add them to the outputMap with the
-            // correct key.
-            for ( final Map.Entry<String, List<String>> entry : outputFieldNameMap.entrySet() ) {
-                for ( final String fieldName : entry.getValue() ) {
-                    if ( extraFieldOutputMap.containsKey(fieldName) ) {
-                        outputMap.put(entry.getKey(), extraFieldOutputMap.remove(fieldName));
-                        break;
-                    }
-                }
-            }
-
-            // Merge our output maps together:
-            outputMap.putAll(extraFieldOutputMap);
-
-            // Now translate fields to the field names that MAF likes:
-            final LinkedHashMap<String, String> mafCompliantOutputMap = replaceFuncotationValuesWithMafCompliantValues(outputMap);
-
-            // Write our header if we have to:
-            if ( ! hasWrittenHeader ) {
-                writeHeader(mafCompliantOutputMap);
-            }
-
-            // Write the output (with manual annotations at the end):
-            for ( final Map.Entry<String, String> entry : mafCompliantOutputMap.entrySet() ) {
-                writeString(entry.getValue());
-                writeString(MafOutputRendererConstants.FIELD_DELIMITER);
-            }
-            writeLine(manualAnnotationSerializedString);
         }
+    }
+
+    @VisibleForTesting
+    LinkedHashMap<String, String> createMafCompliantOutputMap(final Allele altAllele, final List<Funcotation> funcotations) {
+        // Create our output maps:
+        final LinkedHashMap<String, Object> outputMap = new LinkedHashMap<>(defaultMap);
+        final LinkedHashMap<String, Object> extraFieldOutputMap = new LinkedHashMap<>();
+
+        // Get our funcotations for this allele and add them to the output maps:
+        for (final Funcotation funcotation : funcotations) {
+            if (funcotation.getAltAllele().equals(altAllele)) {
+                // Add all the fields from the other funcotations into the extra field output:
+                for (final String field : funcotation.getFieldNames()) {
+                    setField(extraFieldOutputMap, field, funcotation.getField(field));
+                }
+            }
+        }
+
+        // Now add in our annotation overrides so they can be aliased correctly with the outputFieldNameMap:
+        extraFieldOutputMap.putAll(overrideAnnotations);
+
+        // Go through all output fields and see if any of the names in the value list are in our extraFieldOutputMap.
+        // For any that match, we remove them from our extraFieldOutputMap and add them to the outputMap with the
+        // correct key.
+        for (final Map.Entry<String, List<String>> entry : outputFieldNameMap.entrySet()) {
+            for (final String fieldName : entry.getValue()) {
+                if (extraFieldOutputMap.containsKey(fieldName)) {
+                    outputMap.put(entry.getKey(), extraFieldOutputMap.remove(fieldName));
+                    break;
+                }
+            }
+        }
+
+        // Merge our output maps together:
+        outputMap.putAll(extraFieldOutputMap);
+
+        // Now translate fields/values to the field names/values that MAF likes:
+        final LinkedHashMap<String, String> mafCompliantMap = replaceFuncotationValuesWithMafCompliantValues(outputMap);
+
+        // Remove any fields that are excluded and sanitize any field values.
+        return mafCompliantMap.keySet().stream()
+            .filter(k -> !excludedOutputFields.contains(k))
+            .collect(Collectors.toMap(
+                    Function.identity(), k -> FuncotatorUtils.sanitizeFuncotationFieldForMaf(mafCompliantMap.get(k)),
+                    (u, v) -> {
+                        throw new GATKException.ShouldNeverReachHereException("Found duplicate keys for MAF output");
+                        },
+                    LinkedHashMap::new));
     }
 
     //==================================================================================================================
@@ -284,7 +414,7 @@ public class MafOutputRenderer extends OutputRenderer {
 
         // Massage individual Key/Value pairs:
         for ( final String key : outputMap.keySet() ) {
-            finalOutMap.put(key, mafTransform(key, outputMap.get(key).toString()) );
+            finalOutMap.put(key, mafTransform(key, outputMap.get(key).toString(), referenceVersion) );
         }
 
         // Massage the OtherTranscripts field:
@@ -351,10 +481,10 @@ public class MafOutputRenderer extends OutputRenderer {
      * Transforms a given {@code value} to the equivalent MAF-valid value based on the given {@code key}.
      * @param key The {@code key} off of which to base the transformation.  This key is the final (transformed) key for output (i.e. the column name in the MAF file).
      * @param value The {@code value} to transform into a MAF-valid value.
+     * @param referenceVersion The version of the reference used to create these annotations.
      * @return The MAF-valid equivalent of the given {@code value}.
      */
-    @VisibleForTesting
-    String mafTransform(final String key, final String value) {
+    public static String mafTransform(final String key, final String value, final String referenceVersion) {
 
         switch (key) {
             case MafOutputRendererConstants.FieldName_Variant_Classification:
@@ -367,62 +497,79 @@ public class MafOutputRenderer extends OutputRenderer {
                 if ( value.equals(MafOutputRendererConstants.FieldValue_Gencode_Chromosome_Mito) ) {
                     return MafOutputRendererConstants.FieldValue_Chromosome_Mito;
                 }
-                else if ( value.toLowerCase().startsWith("chr") ) {
-                    return value.substring(3);
+                else if ( value.toLowerCase().startsWith("chr") && (referenceVersion.toLowerCase().equals("hg19") || referenceVersion.toLowerCase().equals("b37"))) {
+                    final String trimVal = value.substring(3);
+                    if ( HG_19_CHR_SET.contains(trimVal)) {
+                        return trimVal;
+                    }
+                }
+                break;
+            case MafOutputRendererConstants.FieldName_Other_Transcripts:
+                // Use apache commons string utils because it's much, much faster to do this replacement:
+                return StringUtils.replaceEachRepeatedly(value, ORDERED_GENCODE_VARIANT_CLASSIFICATIONS.toArray(new String[]{}), ORDERED_MAF_VARIANT_CLASSIFICATIONS.toArray(new String[]{}));
+        }
+
+        return value;
+     }
+
+    /**
+     * Transforms a given {@code value} from a MAF-valid value to a general-purpose value based on the given {@code key}.
+     * @param key The {@code key} off of which to base the transformation.  This key is the transformed key for output (i.e. the column name in the MAF file).
+     * @param value The {@code value} to transform from a MAF-valid value into a general-purpose value.
+     * @param referenceVersion The version of the reference used to create these annotations.
+     * @return The general-purpose equivalent of the given MAF-valid {@code value}.
+     */
+    public static String mafTransformInvert(final String key, final String value, final String referenceVersion ) {
+        switch (key) {
+            case MafOutputRendererConstants.FieldName_Variant_Classification:
+                if ( MafOutputRendererConstants.VariantClassificationMapInverse.containsKey(value)) {
+                    return MafOutputRendererConstants.VariantClassificationMapInverse.get(value);
+                }
+                break;
+
+            case MafOutputRendererConstants.FieldName_Chromosome:
+                if ( value.equals(MafOutputRendererConstants.FieldValue_Chromosome_Mito) ) {
+                    return MafOutputRendererConstants.FieldValue_Gencode_Chromosome_Mito;
+                }
+                else if (referenceVersion.toLowerCase().equals("hg19") || referenceVersion.toLowerCase().equals("b37")) {
+                    if ( value.length() <= 2 ) {
+                        if ( HG_19_CHR_SET.contains(value) ) {
+                            return "chr" + value;
+                        }
+                    }
                 }
                 break;
             case MafOutputRendererConstants.FieldName_Other_Transcripts:
 
                 // Use apache commons string utils because it's much, much faster to do this replacement:
-                return StringUtils.replaceEachRepeatedly(value,
-                        new String[]{GencodeFuncotation.VariantClassification.IN_FRAME_DEL.toString(),
-                                GencodeFuncotation.VariantClassification.IN_FRAME_DEL.toString(),
-                                GencodeFuncotation.VariantClassification.IN_FRAME_INS.toString(),
-                                GencodeFuncotation.VariantClassification.FRAME_SHIFT_INS.toString(),
-                                GencodeFuncotation.VariantClassification.FRAME_SHIFT_DEL.toString(),
-                                GencodeFuncotation.VariantClassification.MISSENSE.toString(),
-                                GencodeFuncotation.VariantClassification.NONSENSE.toString(),
-                                GencodeFuncotation.VariantClassification.SILENT.toString(),
-                                GencodeFuncotation.VariantClassification.SPLICE_SITE.toString(),
-                                GencodeFuncotation.VariantClassification.DE_NOVO_START_IN_FRAME.toString(),
-                                GencodeFuncotation.VariantClassification.DE_NOVO_START_OUT_FRAME.toString(),
-                                GencodeFuncotation.VariantClassification.START_CODON_SNP.toString(),
-                                GencodeFuncotation.VariantClassification.START_CODON_INS.toString(),
-                                GencodeFuncotation.VariantClassification.START_CODON_DEL.toString(),
-                                GencodeFuncotation.VariantClassification.NONSTOP.toString(),
-                                GencodeFuncotation.VariantClassification.FIVE_PRIME_UTR.toString(),
-                                GencodeFuncotation.VariantClassification.THREE_PRIME_UTR.toString(),
-                                GencodeFuncotation.VariantClassification.FIVE_PRIME_FLANK.toString(),
-                                GencodeFuncotation.VariantClassification.INTRON.toString(),
-                                GencodeFuncotation.VariantClassification.LINCRNA.toString(),
-                        },
-                        new String[]{
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.IN_FRAME_DEL.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.IN_FRAME_DEL.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.IN_FRAME_INS.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FRAME_SHIFT_INS.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FRAME_SHIFT_DEL.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.MISSENSE.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.NONSENSE.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.SILENT.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.SPLICE_SITE.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.DE_NOVO_START_IN_FRAME.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.DE_NOVO_START_OUT_FRAME.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.START_CODON_SNP.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.START_CODON_INS.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.START_CODON_DEL.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.NONSTOP.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FIVE_PRIME_UTR.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.THREE_PRIME_UTR.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.FIVE_PRIME_FLANK.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.INTRON.toString()),
-                                MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.LINCRNA.toString())
-                            }
-                        );
+                // But we have to do the LINCRNA -> RNA conversion separately, so exclude those indices:
+                String replacement = StringUtils.replaceEachRepeatedly(
+                        value,
+                        ORDERED_MAF_VARIANT_CLASSIFICATIONS.subList(0, ORDERED_MAF_VARIANT_CLASSIFICATIONS.size()-1).toArray(new String[]{}),
+                        ORDERED_GENCODE_VARIANT_CLASSIFICATIONS.subList(0, ORDERED_MAF_VARIANT_CLASSIFICATIONS.size()-1).toArray(new String[]{})
+                );
+
+                // Handle the RNA/LINCRNA case specially:
+                final String needle = MafOutputRendererConstants.VariantClassificationMap.get(GencodeFuncotation.VariantClassification.LINCRNA.toString());
+                int indx = replacement.indexOf(needle);
+                while ( indx != -1 ) {
+                    // make sure the previous letters are not LINC:
+                    if ( (indx <= 3 ) || ((indx > 3) && (!replacement.substring(indx - 4, indx).equals("LINC")))) {
+                        replacement = replacement.substring(0, indx) + GencodeFuncotation.VariantClassification.LINCRNA.toString() + replacement.substring(indx + needle.length());
+                        indx += needle.length();
+                    }
+                    else {
+                        ++indx;
+                    }
+
+                    indx = replacement.indexOf(needle, indx);
+                }
+
+                return replacement;
         }
 
         return value;
-     }
+    }
 
     /**
      * Set the field in the given {@code outputMap} specified by the given {@code key} to the given {@code value}.
@@ -445,64 +592,79 @@ public class MafOutputRenderer extends OutputRenderer {
     }
 
     /**
-     * Write the given line to the {@link #printWriter} and append a newline.
-     * @param line The {@link String} to write as a line to the {@link #printWriter}.
+     * Write the given line to the {@link #writer} and append a newline.
+     * @param line The {@link String} to write as a line to the {@link #writer}.
      */
-    private void writeLine(final String line) {
+    private void writeLine(final String line) throws IOException {
         writeString(line);
         writeString(System.lineSeparator());
     }
 
     /**
-     * Write the given {@link String} to the {@link #printWriter}.
-     * @param s The {@link String} to write to the {@link #printWriter}.
+     * Write the given {@link String} to the {@link #writer}.
+     * @param s The {@link String} to write to the {@link #writer}.
      */
-    private void writeString(final String s) {
-        printWriter.write(s);
+    private void writeString(final String s) throws IOException {
+        writer.write(s);
     }
 
     /**
      * Write the header to the output file.
-     * @param outputMap A populated output map from which to derive the header columns.
+     * @param outputFields Ordered list of the header columns.  These will be written as presented.
      */
-    protected void writeHeader(final LinkedHashMap<String, String> outputMap) {
-        // Write out version:
-        writeLine(MafOutputRendererConstants.COMMENT_STRING + "version " + VERSION);
-        writeLine(MafOutputRendererConstants.COMMENT_STRING + MafOutputRendererConstants.COMMENT_STRING);
+    protected void writeHeader(final List<String> outputFields) {
+        try {
+            // Write out version:
+            writeLine(MafOutputRendererConstants.COMMENT_STRING + "version " + VERSION);
+            writeLine(MafOutputRendererConstants.COMMENT_STRING + MafOutputRendererConstants.COMMENT_STRING);
 
-        // Write previous header info:
-        for ( final VCFHeaderLine line : inputFileHeader.getMetaDataInInputOrder() ) {
-            printWriter.write(MafOutputRendererConstants.COMMENT_STRING);
-            printWriter.write(MafOutputRendererConstants.COMMENT_STRING);
-            printWriter.write(" ");
-            writeLine( line.toString() );
+            // Write previous header info:
+            for (final VCFHeaderLine line : inputFileHeader.getMetaDataInInputOrder()) {
+                writer.write(MafOutputRendererConstants.COMMENT_STRING);
+                writer.write(MafOutputRendererConstants.COMMENT_STRING);
+                writer.write(" ");
+                writeLine(line.toString());
+            }
+
+            // Write any default tool header lines:
+            for (final String line : toolHeaderLines) {
+                writer.write(MafOutputRendererConstants.COMMENT_STRING);
+                writer.write(MafOutputRendererConstants.COMMENT_STRING);
+                writer.write(" ");
+                writeLine(line);
+            }
+
+            // Write tool name and the data sources with versions:
+            writer.write(MafOutputRendererConstants.COMMENT_STRING);
+            writer.write(MafOutputRendererConstants.COMMENT_STRING);
+            writer.write(" ");
+            writer.write(" Funcotator ");
+            writer.write(Funcotator.VERSION);
+            writer.write(" | Date ");
+            writer.write(new SimpleDateFormat("yyyymmdd'T'hhmmss").format(new Date()));
+            writer.write(" | ");
+            writer.write(getDataSourceInfoString());
+            writeLine("");
+
+            // Write the column headers for our output set and our manual annotations:
+            writer.write(outputFields.stream().collect(Collectors.joining(MafOutputRendererConstants.FIELD_DELIMITER)));
+            writeLine(MafOutputRendererConstants.FIELD_DELIMITER + manualAnnotations.keySet()
+                    .stream()
+                    .collect(Collectors.joining(MafOutputRendererConstants.FIELD_DELIMITER)));
+
+            // Make sure we keep track of the fact that we've now written the header:
+            hasWrittenHeader = true;
+        } catch (IOException e){
+            throw new UserException.CouldNotCreateOutputFile("Exception while writing maf header, caused by " + e.getMessage(), e);
         }
+    }
 
-        // Write any default tool header lines:
-        for ( final String line : toolHeaderLines ) {
-            printWriter.write(MafOutputRendererConstants.COMMENT_STRING);
-            printWriter.write(MafOutputRendererConstants.COMMENT_STRING);
-            printWriter.write(" ");
-            writeLine(line);
-        }
-
-        // Write tool name and the data sources with versions:
-        printWriter.write(MafOutputRendererConstants.COMMENT_STRING);
-        printWriter.write(MafOutputRendererConstants.COMMENT_STRING);
-        printWriter.write(" ");
-        printWriter.write(" Funcotator ");
-        printWriter.write(Funcotator.VERSION);
-        printWriter.write(" | Date ");
-        printWriter.write(new SimpleDateFormat("yyyymmdd'T'hhmmss").format(new Date()));
-        printWriter.write(getDataSourceInfoString());
-        writeLine("");
-
-        // Write the column headers for our output set and our manual annotations:
-        printWriter.write( outputMap.keySet().stream().collect(Collectors.joining(MafOutputRendererConstants.FIELD_DELIMITER)) );
-        writeLine(MafOutputRendererConstants.FIELD_DELIMITER + manualAnnotations.keySet().stream().collect(Collectors.joining(MafOutputRendererConstants.FIELD_DELIMITER)));
-
-        // Make sure we keep track of the fact that we've now written the header:
-        hasWrittenHeader = true;
+    /** No field ordering is preserved in the output of this method.
+     * @return Immutable copy of the reverse output field map used by this MafOutputRenderer.
+     * In other words, return a mapping for the input field name to the MAF column this will produce. Never {@code null}
+     */
+    public ImmutableMap<String, Set<String>> getReverseOutputFieldNameMap() {
+        return  ImmutableMap.copyOf(Utils.getReverseValueToListMap(outputFieldNameMap));
     }
 
     /**
@@ -593,6 +755,11 @@ public class MafOutputRenderer extends OutputRenderer {
         defaultMap.put(MafOutputRendererConstants.FieldName_OREGANNO_ID                            ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING);
         defaultMap.put(MafOutputRendererConstants.FieldName_OREGANNO_Values                        ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING);
         defaultMap.put(MafOutputRendererConstants.FieldName_tumor_f                                ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING);
+        defaultMap.put(MafOutputRendererConstants.FieldName_t_alt_count                            ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING );
+        defaultMap.put(MafOutputRendererConstants.FieldName_t_ref_count                            ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING );
+        defaultMap.put(MafOutputRendererConstants.FieldName_n_alt_count                            ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING );
+        defaultMap.put(MafOutputRendererConstants.FieldName_n_ref_count                            ,      MafOutputRendererConstants.UNKNOWN_VALUE_STRING );
+
     }
 
     /**
@@ -685,6 +852,10 @@ public class MafOutputRenderer extends OutputRenderer {
         outputFieldNameMap.put( MafOutputRendererConstants.FieldName_OREGANNO_Values                        , MafOutputRendererConstants.OutputFieldNameMap_OREGANNO_Values );
 
         outputFieldNameMap.put( MafOutputRendererConstants.FieldName_tumor_f                                , MafOutputRendererConstants.OutputFieldNameMap_tumor_f );
+        outputFieldNameMap.put( MafOutputRendererConstants.FieldName_t_alt_count                            , MafOutputRendererConstants.OutputFieldNameMap_t_alt_count );
+        outputFieldNameMap.put( MafOutputRendererConstants.FieldName_t_ref_count                            , MafOutputRendererConstants.OutputFieldNameMap_t_ref_count );
+        outputFieldNameMap.put( MafOutputRendererConstants.FieldName_n_alt_count                            , MafOutputRendererConstants.OutputFieldNameMap_n_alt_count );
+        outputFieldNameMap.put( MafOutputRendererConstants.FieldName_n_ref_count                            , MafOutputRendererConstants.OutputFieldNameMap_n_ref_count );
     }
 
     //==================================================================================================================

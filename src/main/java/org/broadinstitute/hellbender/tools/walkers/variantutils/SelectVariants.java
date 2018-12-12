@@ -10,11 +10,7 @@ import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.variantcontext.VariantContextBuilder;
 import htsjdk.variant.variantcontext.VariantContextUtils;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
-import htsjdk.variant.vcf.VCFHeader;
-import htsjdk.variant.vcf.VCFConstants;
-import htsjdk.variant.vcf.VCFHeaderLine;
-import htsjdk.variant.vcf.VCFStandardHeaderLines;
-import htsjdk.variant.vcf.VCFUtils;
+import htsjdk.variant.vcf.*;
 
 import java.nio.file.Path;
 import org.broadinstitute.barclay.argparser.Argument;
@@ -22,15 +18,12 @@ import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.argparser.Hidden;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.filters.*;
 import picard.cmdline.programgroups.VariantManipulationProgramGroup;
 import org.broadinstitute.hellbender.engine.FeatureInput;
 import org.broadinstitute.hellbender.engine.FeatureContext;
 import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
-import org.broadinstitute.hellbender.engine.filters.VariantFilter;
-import org.broadinstitute.hellbender.engine.filters.VariantIDsVariantFilter;
-import org.broadinstitute.hellbender.engine.filters.VariantFilterLibrary;
-import org.broadinstitute.hellbender.engine.filters.VariantTypesVariantFilter;
 import org.broadinstitute.hellbender.engine.VariantWalker;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.walkers.annotator.ChromosomeCounts;
@@ -41,12 +34,12 @@ import org.broadinstitute.hellbender.utils.samples.PedigreeValidationType;
 import org.broadinstitute.hellbender.utils.samples.SampleDB;
 import org.broadinstitute.hellbender.utils.samples.SampleDBBuilder;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.variant.GATKVariantContextUtils;
 import org.broadinstitute.hellbender.utils.variant.*;
 
 import java.io.File;
 import java.util.*;
 import java.util.function.Predicate;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -404,6 +397,18 @@ public final class SelectVariants extends VariantWalker {
     @Argument(fullName="set-filtered-gt-to-nocall", optional=true, doc="Set filtered genotypes to no-call")
     private boolean setFilteredGenotypesToNocall = false;
 
+    /**
+     * Info annotation fields to be dropped (specified by key)
+     */
+    @Argument(fullName = "drop-info-annotation", shortName = "DA", optional = true, doc = "Info annotations to drop from output vcf.  Annotations to be dropped are specified by their key.")
+    private List<String> infoAnnotationsToDrop = new ArrayList<>();
+
+    /**
+     * Genotype annotation fields to be dropped (specified by key)
+     */
+    @Argument(fullName = "drop-genotype-annotation", shortName = "DGA", optional = true, doc = "Genotype annotations to drop from output vcf.  Annotations to be dropped are specified by their key.")
+    private List<String> genotypeAnnotationsToDrop = new ArrayList<>();
+
     @Hidden
     @Argument(fullName="allow-nonoverlapping-command-line-samples", optional=true,
                     doc="Allow samples other than those in the VCF to be specified on the command line. These samples will be ignored.")
@@ -508,6 +513,16 @@ public final class SelectVariants extends VariantWalker {
                 actualLines = headerLines;
             }
         }
+        if (!infoAnnotationsToDrop.isEmpty()) {
+            for (final String infoField : infoAnnotationsToDrop) {
+                logger.info(String.format("Will drop info annotation: %s",infoField));
+            }
+        }
+        if (!genotypeAnnotationsToDrop.isEmpty()) {
+            for (final String genotypeAnnotation : genotypeAnnotationsToDrop) {
+                logger.info(String.format("Will drop genotype annotation: %s",genotypeAnnotation));
+            }
+        }
 
         vcfWriter = createVCFWriter(outFile);
         vcfWriter.writeHeader(new VCFHeader(actualLines, samples));
@@ -569,8 +584,15 @@ public final class SelectVariants extends VariantWalker {
         }
         final VariantContext filteredGenotypeToNocall = setFilteredGenotypesToNocall ? builder.make(): sub;
 
-        // Not excluding non-variants or subsetted polymorphic variants AND including filtered loci or subsetted variant is not filtered
-        if ((!XLnonVariants || filteredGenotypeToNocall.isPolymorphicInSamples()) && (!XLfiltered || !filteredGenotypeToNocall.isFiltered())) {
+        // Not excluding non-variants OR (subsetted polymorphic variants AND not spanning deletion) AND (including filtered loci OR subsetted variant) is not filtered
+        // If exclude non-variants argument is not called, filtering will NOT occur.
+        // If exclude non-variants is called, and a spanning deletion exists, the spanning deletion will be filtered
+        // If exclude non-variants is called, it is a polymorphic variant, but not a spanning deletion, filtering will not occur
+        // True iff exclude-filtered is not called or the filteredGenotypeToNocall is not already filtered
+
+        if ((!XLnonVariants || (filteredGenotypeToNocall.isPolymorphicInSamples() && !GATKVariantContextUtils.isSpanningDeletionOnly(filteredGenotypeToNocall)))
+                && (!XLfiltered || !filteredGenotypeToNocall.isFiltered()))
+        {
 
             // Write the subsetted variant if it matches all of the expressions
             boolean failedJexlMatch = false;
@@ -591,9 +613,35 @@ public final class SelectVariants extends VariantWalker {
 
             if (!failedJexlMatch &&
                     (!selectRandomFraction || Utils.getRandomGenerator().nextDouble() < fractionRandom)) {
-                vcfWriter.add(filteredGenotypeToNocall);
+                //remove annotations being dropped and write variantcontext
+                final VariantContext variantContextToWrite = buildVariantContextWithDroppedAnnotationsRemoved(filteredGenotypeToNocall);
+                vcfWriter.add(variantContextToWrite);
             }
         }
+    }
+
+    private VariantContext buildVariantContextWithDroppedAnnotationsRemoved(final VariantContext vc) {
+        if (infoAnnotationsToDrop.isEmpty() && genotypeAnnotationsToDrop.isEmpty()) {
+            return vc;
+        }
+        final VariantContextBuilder rmAnnotationsBuilder = new VariantContextBuilder(vc);
+        for (String infoField : infoAnnotationsToDrop) {
+            rmAnnotationsBuilder.rmAttribute(infoField);
+        }
+        if (!genotypeAnnotationsToDrop.isEmpty()) {
+            final ArrayList<Genotype> genotypesToWrite = new ArrayList<>();
+            for (Genotype genotype : vc.getGenotypes()) {
+                final GenotypeBuilder genotypeBuilder = new GenotypeBuilder(genotype).noAttributes();
+                final Map<String, Object> attributes = new HashMap<>(genotype.getExtendedAttributes());
+                for (String genotypeAnnotation : genotypeAnnotationsToDrop) {
+                    attributes.remove(genotypeAnnotation);
+                }
+                genotypeBuilder.attributes(attributes);
+                genotypesToWrite.add(genotypeBuilder.make());
+            }
+            rmAnnotationsBuilder.genotypes(GenotypesContext.create(genotypesToWrite));
+        }
+        return rmAnnotationsBuilder.make();
     }
 
     /**
@@ -649,19 +697,19 @@ public final class SelectVariants extends VariantWalker {
      * Create filters for variant types, ids, and genomic intervals.
      */
     @Override
-    protected VariantFilter makeVariantFilter() {
-        VariantFilter compositeFilter = VariantFilterLibrary.ALLOW_ALL_VARIANTS;
+    protected CountingVariantFilter makeVariantFilter() {
+        CountingVariantFilter compositeFilter = new CountingVariantFilter(VariantFilterLibrary.ALLOW_ALL_VARIANTS);
 
         if (!selectedTypes.isEmpty()) {
-            compositeFilter = compositeFilter.and(new VariantTypesVariantFilter(selectedTypes));
+            compositeFilter = compositeFilter.and(new CountingVariantFilter(new VariantTypesVariantFilter(selectedTypes)));
         }
 
         if (rsIDsToKeep != null && !rsIDsToKeep.isEmpty()) {
-            compositeFilter = compositeFilter.and(new VariantIDsVariantFilter(rsIDsToKeep));
+            compositeFilter = compositeFilter.and(new CountingVariantFilter(new VariantIDsVariantFilter(rsIDsToKeep)));
         }
 
         if (rsIDsToRemove != null && !rsIDsToRemove.isEmpty()) {
-            compositeFilter = compositeFilter.and(new VariantIDsVariantFilter(rsIDsToRemove).negate());
+            compositeFilter = compositeFilter.and(new CountingVariantFilter(new VariantIDsVariantFilter(rsIDsToRemove).negate()));
         }
 
         return compositeFilter;
@@ -672,7 +720,7 @@ public final class SelectVariants extends VariantWalker {
      */
     private SortedSet<String> createSampleNameInclusionList(Map<String, VCFHeader> vcfHeaders) {
         final SortedSet<String> vcfSamples = VcfUtils.getSortedSampleSet(vcfHeaders, GATKVariantContextUtils.GenotypeMergeType.REQUIRE_UNIQUE);
-        final Collection<String> samplesFromExpressions = matchSamplesExpressions(vcfSamples, sampleExpressions);
+        final Collection<String> samplesFromExpressions = Utils.filterCollectionByExpressions(vcfSamples, sampleExpressions, false);
 
         // first, find any samples that were listed on the command line but which don't exist in in the header
         final Set<String> samplesNotInHeader = new LinkedHashSet<>(samplesFromExpressions.size()+sampleNames.size());
@@ -707,7 +755,7 @@ public final class SelectVariants extends VariantWalker {
         }
 
         // Exclude samples take precedence over include - remove any excluded samples
-        final Collection<String> XLsamplesFromExpressions = matchSamplesExpressions(vcfSamples, XLsampleExpressions);
+        final Collection<String> XLsamplesFromExpressions = Utils.filterCollectionByExpressions(vcfSamples, XLsampleExpressions, false);
         samples.removeAll(XLsampleNames);
         samples.removeAll(XLsamplesFromExpressions);
         noSamplesSpecified = noSamplesSpecified &&
@@ -771,6 +819,10 @@ public final class SelectVariants extends VariantWalker {
         headerLines.addAll(Arrays.asList(ChromosomeCounts.descriptions));
         headerLines.add(VCFStandardHeaderLines.getInfoLine(VCFConstants.DEPTH_KEY));
 
+        //remove header lines for info field and genotype annotations being dropped
+        headerLines.removeIf(l->l instanceof VCFInfoHeaderLine && infoAnnotationsToDrop.contains(((VCFInfoHeaderLine)l).getID()));
+        headerLines.removeIf(l->l instanceof VCFFormatHeaderLine && genotypeAnnotationsToDrop.contains(((VCFFormatHeaderLine)l).getID()));
+
         return headerLines;
     }
 
@@ -783,63 +835,6 @@ public final class SelectVariants extends VariantWalker {
         return sampleDBBuilder.getFinalSampleDB();
     }
 
-    /**
-     * Given a collection of samples and a collection of regular expressions, generates the set of samples that match
-     * each expression
-     * @param originalSamples list of samples to select samples from
-     * @param sampleExpressions list of expressions to use for matching samples
-     * @return the set of samples from originalSamples that satisfy at least one of the expressions in sampleExpressions
-     */
-    private static Collection<String> matchSamplesExpressions(Collection<String> originalSamples, Collection<String> sampleExpressions) {
-        return sampleExpressions == null ?
-                Collections.emptySet() :
-                includeMatching(originalSamples, sampleExpressions, false);
-    }
-
-    /**
-     * Returns a new set of values including only values listed by filters/expressions
-     * <p/>
-     *
-     * @param sourceValues     Values to match against
-     * @param filterExpressions    Filters/expressions
-     * @param exactMatch If true match filters exactly, otherwise use as both exact and regular expressions
-     * @return entries from values, filtered by filters
-     */
-    protected static Set<String> includeMatching(
-            final Collection<String> sourceValues,
-            final Collection<String> filterExpressions,
-            final boolean exactMatch) {
-        Utils.nonNull(sourceValues);
-        Utils.nonNull(filterExpressions);
-
-        final Set<String> filteredValues = new LinkedHashSet<>();
-
-        Collection<Pattern> patterns = null;
-        if (!exactMatch) {
-            patterns = compilePatterns(filterExpressions);
-        }
-        for (final String value : sourceValues) {
-            if (filterExpressions.contains(value)) {
-                filteredValues.add(value);
-            } else if (!exactMatch) {
-                for (final Pattern pattern : patterns) {
-                    if (pattern.matcher(value).find()) {
-                        filteredValues.add(value);
-                    }
-                }
-            }
-        }
-
-        return filteredValues;
-    }
-
-    private static Collection<Pattern> compilePatterns(final Collection<String> filters) {
-        final Collection<Pattern> patterns = new ArrayList<Pattern>();
-        for (final String filter: filters) {
-            patterns.add(Pattern.compile(filter));
-        }
-        return patterns;
-    }
 
     /**
      * Invert logic if specified

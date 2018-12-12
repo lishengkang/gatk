@@ -1,27 +1,24 @@
 package org.broadinstitute.hellbender.tools.spark.pipelines;
 
+import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMRecord;
 import htsjdk.samtools.SamReader;
 import htsjdk.samtools.SamReaderFactory;
 import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
-import org.broadinstitute.hellbender.engine.filters.ReadLengthReadFilter;
-import org.broadinstitute.hellbender.engine.filters.ReadNameReadFilter;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.PrintReadsIntegrationTest;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
-import org.broadinstitute.hellbender.utils.test.SamAssertionUtils;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.SamAssertionUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -86,8 +83,8 @@ public final class PrintReadsSparkIntegrationTest extends CommandLineProgramTest
         final File outFile = GATKBaseTest.createTempFile(fileIn + ".", extOut);
         outFile.deleteOnExit();
         final File originalFile = new File(TEST_DATA_DIR, fileIn);
-        final File refFile;
         final String[] args;
+        final File refFile;
         if (reference == null) {
             refFile = null;
             args = new String[]{
@@ -102,6 +99,11 @@ public final class PrintReadsSparkIntegrationTest extends CommandLineProgramTest
                     "-R", refFile.getAbsolutePath()
             };
         }
+        try (ReadsDataSource ds = reference==null ? new ReadsDataSource(originalFile.toPath()) :
+                new ReadsDataSource(originalFile.toPath(), SamReaderFactory.make().referenceSequence(refFile.toPath()))){
+            Assert.assertEquals(ds.getHeader().getSortOrder(), SAMFileHeader.SortOrder.coordinate);
+        }
+
         runCommandLine(args);
 
         SamAssertionUtils.assertSamsEqual(outFile, originalFile, refFile);
@@ -170,7 +172,7 @@ public final class PrintReadsSparkIntegrationTest extends CommandLineProgramTest
         };
     }
 
-    @Test(dataProvider="testFileToFile_queryNameSorted", expectedExceptions = UserException.class, groups="spark")
+    @Test(dataProvider="testFileToFile_queryNameSorted", groups="spark")
     public void testFileToFile_queryNameSorted(String fileIn, String extOut, String reference) throws Exception {
         final File outFile = GATKBaseTest.createTempFile(fileIn + ".", extOut);
         outFile.deleteOnExit();
@@ -191,13 +193,39 @@ public final class PrintReadsSparkIntegrationTest extends CommandLineProgramTest
                     "-R", refFile.getAbsolutePath()
             };
         }
+        try (ReadsDataSource ds = reference==null ? new ReadsDataSource(originalFile.toPath()) :
+                new ReadsDataSource(originalFile.toPath(), SamReaderFactory.make().referenceSequence(refFile.toPath()))){
+            Assert.assertEquals(ds.getHeader().getSortOrder(), SAMFileHeader.SortOrder.queryname);
+        }
+
         runCommandLine(args);
         SamAssertionUtils.assertSamsEqual(outFile, originalFile, refFile);
     }
 
-    @Test(expectedExceptions = UserException.class, groups = "spark")
+    @Test( groups = "spark")
     public void testNameSorted() throws Exception {
         final File inBam = new File(getTestDataDir(), "print_reads.bam");
+        try (ReadsDataSource ds = new ReadsDataSource(inBam.toPath())){
+            Assert.assertEquals(ds.getHeader().getSortOrder(), SAMFileHeader.SortOrder.queryname);
+        }
+        final File outBam = GATKBaseTest.createTempFile("print_reads", ".bam");
+        ArgumentsBuilder args = new ArgumentsBuilder();
+        args.add("--" + StandardArgumentDefinitions.INPUT_LONG_NAME);
+        args.add(inBam.getCanonicalPath());
+        args.add("--" + StandardArgumentDefinitions.OUTPUT_LONG_NAME);
+        args.add(outBam.getCanonicalPath());
+
+        this.runCommandLine(args.getArgsArray());
+
+        SamAssertionUtils.assertSamsEqual(outBam, inBam);
+    }
+
+    @Test( groups = "spark")
+    public void testUnSorted() throws Exception {
+        final File inBam = new File(getTestDataDir(), "print_reads.unsorted.bam");
+        try (ReadsDataSource ds = new ReadsDataSource(inBam.toPath())){
+            Assert.assertEquals(ds.getHeader().getSortOrder(), SAMFileHeader.SortOrder.unsorted);
+        }
         final File outBam = GATKBaseTest.createTempFile("print_reads", ".bam");
         ArgumentsBuilder args = new ArgumentsBuilder();
         args.add("--" + StandardArgumentDefinitions.INPUT_LONG_NAME);

@@ -1,11 +1,12 @@
 package org.broadinstitute.hellbender.tools.funcotator;
 
+import org.broadinstitute.hellbender.engine.VariantWalkerBase;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.DataSourceUtils;
 import org.broadinstitute.hellbender.tools.funcotator.dataSources.xsv.SimpleKeyXsvFuncotationFactory;
 
 import java.nio.file.Path;
-import java.util.*;
+import java.util.Properties;
 
 /**
  * Class to store argument definitions specific to {@link Funcotator}.
@@ -27,24 +28,43 @@ public class FuncotatorArgumentDefinitions {
     // ------------------------------------------------------------
     // Definitions for optional arguments:
 
-    public static final String IGNORE_FILTERED_VARIANTS_LONG_NAME = "ignore-filtered-variants";
+    public static final String REMOVE_FILTERED_VARIANTS_LONG_NAME = "remove-filtered-variants";
 
     public static final String TRANSCRIPT_SELECTION_MODE_LONG_NAME = "transcript-selection-mode";
     public static final TranscriptSelectionMode TRANSCRIPT_SELECTION_MODE_DEFAULT_VALUE = TranscriptSelectionMode.CANONICAL;
 
+    /**
+     * Do not give this a static default value or the integration tests will get hosed.
+     */
     public static final String TRANSCRIPT_LIST_LONG_NAME = "transcript-list";
-    public static final Set<String> TRANSCRIPT_LIST_DEFAULT_VALUE = new HashSet<>();
 
+    /**
+     * Do not give this a static default value or the integration tests will get hosed.
+     */
     public static final String ANNOTATION_DEFAULTS_LONG_NAME = "annotation-default";
-    public static final List<String> ANNOTATION_DEFAULTS_DEFAULT_VALUE = new ArrayList<>();
 
+    /**
+     * Do not give this a static default value or the integration tests will get hosed.
+     */
     public static final String ANNOTATION_OVERRIDES_LONG_NAME = "annotation-override";
-    public static final List<String> ANNOTATION_OVERRIDES_DEFAULT_VALUE = new ArrayList<>();
 
-    public static final String ALLOW_HG19_GENCODE_B37_CONTIG_MATCHING_LONG_NAME = "allow-hg19-gencode-b37-contig-matching";
+    /**
+     * List of final rendered fields to exclude from a final rendering
+     */
+    public static final String EXCLUSION_FIELDS_LONG_NAME = "exclude-field";
 
     public static final String HG19_REFERENCE_VERSION_STRING = "hg19";
     public static final String HG38_REFERENCE_VERSION_STRING = "hg38";
+
+    public static final String FIVE_PRIME_FLANK_SIZE_NAME = "five-prime-flank-size";
+    public static final String THREE_PRIME_FLANK_SIZE_NAME = "three-prime-flank-size";
+    public static final int FIVE_PRIME_FLANK_SIZE_DEFAULT_VALUE = 5000;
+    public static final int THREE_PRIME_FLANK_SIZE_DEFAULT_VALUE = 0;
+
+    public static final String LOOKAHEAD_CACHE_IN_BP_NAME = "lookahead-cache-bp";
+    public static final int LOOKAHEAD_CACHE_IN_BP_DEFAULT_VALUE = VariantWalkerBase.FEATURE_CACHE_LOOKAHEAD;
+
+    public static final String FORCE_B37_TO_HG19_REFERENCE_CONTIG_CONVERSION = "force-b37-to-hg19-reference-contig-conversion";
 
     // ------------------------------------------------------------
     // Helper Types:

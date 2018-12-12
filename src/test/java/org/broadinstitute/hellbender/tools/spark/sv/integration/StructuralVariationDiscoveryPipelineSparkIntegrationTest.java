@@ -1,7 +1,6 @@
 package org.broadinstitute.hellbender.tools.spark.sv.integration;
 
 import htsjdk.samtools.util.CloseableIterator;
-import htsjdk.samtools.util.CloserUtil;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFFileReader;
 import org.apache.hadoop.fs.Path;
@@ -10,10 +9,11 @@ import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.BaseTest;
-import org.broadinstitute.hellbender.utils.test.MiniClusterUtils;
-import org.broadinstitute.hellbender.utils.test.VariantContextTestUtils;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.BaseTest;
+import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
+import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
@@ -56,9 +56,9 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
             return  " -R " + SVIntegrationTestDataProvider.reference_2bit +
                     " -I " + bamLoc +
                     " -O " + outputDir + "/StructuralVariationDiscoveryPipelineSparkIntegrationTest/" +
-            " --aligner-index-image " + alignerRefIndexImgLoc +
+                    " --aligner-index-image " + alignerRefIndexImgLoc +
                     " --kmers-to-ignore " + kmerIgnoreListLoc +
-                    " --contig-sam-file "       + outputDir + "/assemblies.sam" +
+                    " --contig-sam-file "       + outputDir + "/assemblies.bam" +
                     " --breakpoint-intervals " + outputDir + "/intervals" +
                     " --fastq-dir "            + outputDir + "/fastq" +
                     (cnvCallsLoc == null ? "" : " --cnv-calls " + cnvCallsLoc) +
@@ -85,7 +85,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
         tempDirNew.deleteOnExit();
         Files.createDirectories(Paths.get(tempDirNew.getAbsolutePath()+"/fastq"));
         tests.add(new Object[]{
-                new StructuralVariationDiscoveryPipelineSparkIntegrationTest.StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs(
+                new StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs(
                         SVIntegrationTestDataProvider.TEST_BAM,
                         SVIntegrationTestDataProvider.KMER_KILL_LIST,
                         SVIntegrationTestDataProvider.ALIGNER_INDEX_IMG,
@@ -98,7 +98,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
     }
 
     @Test(dataProvider = "svDiscoverPipelineSparkIntegrationTest", groups = "sv")
-    public void testSVDiscoverPipelineRunnableLocal(final StructuralVariationDiscoveryPipelineSparkIntegrationTest.StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs params) throws Exception {
+    public void testSVDiscoverPipelineRunnableLocal(final StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs params) throws IOException {
 
         final List<String> args = Arrays.asList( new ArgumentsBuilder().add(params.getCommandLine()).getArgsArray() );
         runCommandLine(args);
@@ -108,10 +108,12 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
                 SVIntegrationTestDataProvider.EXPECTED_SIMPLE_DEL_VCF,
                 args.get(args.indexOf("-O")+1).concat("sample_experimentalInterpretation_NonComplex.vcf"),
                 annotationsToIgnoreWhenComparingVariants, false);
+
+        Assert.assertTrue(Files.exists(IOUtils.getPath( args.get(args.indexOf("--contig-sam-file") + 1).replace(".bam", ".bai") )));
     }
 
     @Test(dataProvider = "svDiscoverPipelineSparkIntegrationTest", groups = "sv")
-    public void testSVDiscoverPipelineRunnableMiniCluster(final StructuralVariationDiscoveryPipelineSparkIntegrationTest.StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs params) throws Exception {
+    public void testSVDiscoverPipelineRunnableMiniCluster(final StructuralVariationDiscoveryPipelineSparkIntegrationTestArgs params) throws Exception {
 
         MiniClusterUtils.runOnIsolatedMiniCluster(cluster -> {
 
@@ -152,7 +154,7 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
             argsToBeModified.set(idx+1, path.toUri().toString());
 
             idx = argsToBeModified.indexOf("--contig-sam-file");
-            path = new Path(workingDirectory, "assemblies.sam");
+            path = new Path(workingDirectory, "assemblies.bam");
             argsToBeModified.set(idx+1, path.toUri().toString());
 
             idx = argsToBeModified.indexOf("--breakpoint-intervals");
@@ -169,20 +171,38 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
                     vcfOnHDFS.replace("_inv_del_ins.vcf", "_experimentalInterpretation_NonComplex.vcf"),
                     annotationsToIgnoreWhenComparingVariants,
                     true);
+
+            Assert.assertTrue(cluster.getFileSystem().exists(new Path(workingDirectory, "assemblies.bai")));
         });
     }
 
+    // TODO: 8/27/18 swap the when making the switch to the new interpretation tool
+    /**
+     * Exists because testing equivalence between VCF is hard, so we do some customization here.
+     * @param generatedVCFPath                      path to VCF generated by integration tested tool
+     * @param expectedVCFPath                       path to VCF holding expected results
+     * @param experimentalOutputPathForNonComplex   path to an VCF that is produced by experimental interpretation tool, can be {@code null} if not applicable
+     * @param attributesToIgnore                    attributes to ignore when comparing actual and expected VariantContexts, applied to all variants
+     * @param onHDFS                                whether {@code generatedVCFPath} and {@code experimentalOutputPathForNonComplex} are on HDFS system
+     * @throws IOException                          if reading from any of the VCF fails
+     */
     static void svDiscoveryVCFEquivalenceTest(final String generatedVCFPath, final String expectedVCFPath,
                                               final String experimentalOutputPathForNonComplex,
-                                              final List<String> attributesToIgnore, final boolean onHDFS) throws Exception {
+                                              final List<String> attributesToIgnore, final boolean onHDFS) throws IOException {
 
-        final VCFFileReader fileReader = new VCFFileReader(new File(expectedVCFPath), false);
-        final CloseableIterator<VariantContext> iterator = fileReader.iterator();
-        final List<VariantContext> expectedVcs = Utils.stream(iterator).collect(Collectors.toList());
-        CloserUtil.close(iterator);
-        CloserUtil.close(fileReader);
+        final List<VariantContext> expectedVcs;
+        if (expectedVCFPath == null) {
+            expectedVcs = Collections.emptyList();
+        } else {
+            try (final VCFFileReader fileReader = new VCFFileReader(new File(expectedVCFPath), false);
+                 final CloseableIterator<VariantContext> iterator = fileReader.iterator()) {
+                expectedVcs = Utils.stream(iterator).collect(Collectors.toList());
+            }
+        }
 
         List<VariantContext> actualVcs = extractActualVCs(generatedVCFPath, onHDFS);
+        if (expectedVCFPath == null)
+            Assert.assertTrue(actualVcs.isEmpty());
 
         GATKBaseTest.assertCondition(actualVcs, expectedVcs,
                 (a, e) -> VariantContextTestUtils.assertVariantContextsAreEqual(a, e, attributesToIgnore));
@@ -200,23 +220,21 @@ public class StructuralVariationDiscoveryPipelineSparkIntegrationTest extends Co
         }
     }
 
-    private static List<VariantContext> extractActualVCs(final String generatedVCFPath, final boolean onHDFS)
+    static List<VariantContext> extractActualVCs(final String generatedVCFPath, final boolean onHDFS)
             throws IOException {
 
-        final VCFFileReader fileReader;
+        final File appropriateVCF;
         if (onHDFS) {
-            final File tempLocalVCF = GATKBaseTest.createTempFile("variants", "vcf");
-            tempLocalVCF.deleteOnExit();
-            BucketUtils.copyFile(generatedVCFPath, tempLocalVCF.getAbsolutePath());
-            fileReader = new VCFFileReader(tempLocalVCF, false);
+            appropriateVCF = GATKBaseTest.createTempFile("variants", "vcf");
+            appropriateVCF.deleteOnExit();
+            BucketUtils.copyFile(generatedVCFPath, appropriateVCF.getAbsolutePath());
         } else {
-            fileReader = new VCFFileReader(new File(generatedVCFPath), false);
+            appropriateVCF = new File(generatedVCFPath);
         }
-        final CloseableIterator<VariantContext> iterator = fileReader.iterator();
-        final List<VariantContext> actualVcs = Utils.stream(iterator).collect(Collectors.toList());
-        CloserUtil.close(iterator);
-        CloserUtil.close(fileReader);
-
-        return actualVcs;
+        try (final VCFFileReader fileReader = new VCFFileReader(appropriateVCF, false)) {
+            try (final CloseableIterator<VariantContext> iterator = fileReader.iterator()) {
+                return Utils.stream(iterator).collect(Collectors.toList());
+            }
+        }
     }
 }

@@ -2,7 +2,7 @@ package org.broadinstitute.hellbender.tools.walkers.vqsr;
 
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.Main;
 import org.testng.annotations.Test;
 
@@ -95,11 +95,10 @@ public class CNNVariantPipelineTest extends GATKBaseTest {
         args.add("FilterVariantTranches")
                 .addArgument(StandardArgumentDefinitions.VARIANT_LONG_NAME, trancheVCF)
                 .addArgument(StandardArgumentDefinitions.OUTPUT_LONG_NAME, outputVCF.getAbsolutePath())
-                .addArgument("snp-truth-vcf", snpTruthVCF)
-                .addArgument("indel-truth-vcf", indelTruthVCF)
-                .addArgument("tranche", "99.0")
-                .addArgument("tranche", "95.0")
-                .addArgument("max-sites", "2000")
+                .addArgument("resource", snpTruthVCF)
+                .addArgument("resource", indelTruthVCF)
+                .addArgument("snp-tranche", "99.9")
+                .addArgument("indel-tranche", "99.0")
                 .addArgument("info-key", "VQSLOD");
 
         new Main().instanceMain(args.getArgsArray());

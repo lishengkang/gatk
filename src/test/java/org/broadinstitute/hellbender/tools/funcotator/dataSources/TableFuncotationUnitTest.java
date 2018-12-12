@@ -3,14 +3,12 @@ package org.broadinstitute.hellbender.tools.funcotator.dataSources;
 import htsjdk.variant.variantcontext.Allele;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.tools.funcotator.FuncotatorUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
-import java.util.List;
+import java.util.*;
 import java.util.stream.Collectors;
 
 /**
@@ -35,47 +33,47 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
     Object[][] provideForTestGetAltAllele() {
         return new Object[][] {
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "TableFuncotationUnitTest", null),
                         Allele.create("A", false),
                         true
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("C", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("C", false), "TableFuncotationUnitTest", null),
                         Allele.create("C", false),
                         true
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("G", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("G", false), "TableFuncotationUnitTest", null),
                         Allele.create("G", false),
                         true
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("T", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("T", false), "TableFuncotationUnitTest", null),
                         Allele.create("T", false),
                         true
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("C", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("C", false), "TableFuncotationUnitTest", null),
                         Allele.create("A", false),
                         false
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("G", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("G", false), "TableFuncotationUnitTest", null),
                         Allele.create("C", false),
                         false
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("T", false), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("T", false), "TableFuncotationUnitTest", null),
                         Allele.create("G", false),
                         false
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("G", true), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("G", true), "TableFuncotationUnitTest", null),
                         Allele.create("G", false),
                         false
                 },
                 {
-                        new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("T", true), "TableFuncotationUnitTest"),
+                        TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("T", true), "TableFuncotationUnitTest", null),
                         Allele.create("T", false),
                         false
                 },
@@ -100,8 +98,8 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
     Object[][] provideDataForTestSetFieldSerializationOverrideValue() {
 
         final TableFuncotation funcotation =
-                new TableFuncotation(
-                    Arrays.asList("A", "B", "C"), Arrays.asList("1", "2", "3"), Allele.create("A", false), "TableFuncotation"
+                TableFuncotation.create(
+                    Arrays.asList("A", "B", "C"), Arrays.asList("1", "2", "3"), Allele.create("A", false), "TableFuncotation", null
                 );
 
         return new Object[][] {
@@ -122,19 +120,19 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
     Object[][] provideForTestSerializeToVcfString() {
         return new Object[][] {
                 {
-                    new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "Empty"),
+                    TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "Empty", null),
                     ""
                 },
                 {
-                    new TableFuncotation(Collections.singletonList("A"), Collections.singletonList(("1")), Allele.create("A", false), "OneVal"),
+                    TableFuncotation.create(Collections.singletonList("A"), Collections.singletonList(("1")), Allele.create("A", false), "OneVal", null),
                     "1"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("A", "B"), Arrays.asList("1", "2"), Allele.create("A", false), "TwoVals"),
+                    TableFuncotation.create(Arrays.asList("A", "B"), Arrays.asList("1", "2"), Allele.create("A", false), "TwoVals", null),
                     "1|2"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("A", "B", "C"), Arrays.asList("1", "2", "3"), Allele.create("A", false), "ThreeVals"),
+                    TableFuncotation.create(Arrays.asList("A", "B", "C"), Arrays.asList("1", "2", "3"), Allele.create("A", false), "ThreeVals", null),
                     "1|2|3"
                 },
         };
@@ -156,15 +154,15 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
         //final TableFuncotation tableFuncotation, final LinkedHashSet<String> expected
         return new Object[][] {
                 {
-                    new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "Empty"),
+                    TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "Empty", null),
                     new LinkedHashSet<>(Collections.emptyList())
                 },
                 {
-                    new TableFuncotation(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField"),
+                    TableFuncotation.create(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField", null),
                     new LinkedHashSet<>(Collections.singletonList("TESTFIELD"))
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2"), Arrays.asList("TESTVAL1", "TESTVAL2"), Allele.create("A", false), "TwoFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2"), Arrays.asList("TESTVAL1", "TESTVAL2"), Allele.create("A", false), "TwoFields", null),
                     new LinkedHashSet<>(Arrays.asList("TESTFIELD1", "TESTFIELD2"))
                 },
         };
@@ -175,32 +173,32 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
         //final TableFuncotation tableFuncotation, final String fieldName, final String expected
         return new Object[][] {
                 {
-                    new TableFuncotation(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField"),
+                    TableFuncotation.create(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField", null),
                     "TESTFIELD",
                     "TESTVAL"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2"), Arrays.asList("TESTVAL1", "TESTVAL2"), Allele.create("A", false), "TwoFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2"), Arrays.asList("TESTVAL1", "TESTVAL2"), Allele.create("A", false), "TwoFields", null),
                     "TESTFIELD1",
                     "TESTVAL1"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2"), Arrays.asList("TESTVAL1", "TESTVAL2"), Allele.create("A", false), "TwoFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2"), Arrays.asList("TESTVAL1", "TESTVAL2"), Allele.create("A", false), "TwoFields", null),
                     "TESTFIELD2",
                     "TESTVAL2"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields", null),
                     "TESTFIELD1",
                     "TESTVAL1"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields", null),
                     "TESTFIELD2",
                     "TESTVAL2"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields", null),
                     "TESTFIELD3",
                     "TESTVAL3"
                 },
@@ -212,19 +210,19 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
         //final TableFuncotation tableFuncotation, final String fieldName, final String expected
         return new Object[][] {
                 {
-                    new TableFuncotation(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "Empty"),
+                    TableFuncotation.create(Collections.emptyList(), Collections.emptyList(), Allele.create("A", false), "Empty", null),
                     "TESTFIELD_OMICRON"
                 },
                 {
-                    new TableFuncotation(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField"),
+                    TableFuncotation.create(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField", null),
                     "testfield"
                 },
                 {
-                    new TableFuncotation(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField"),
+                    TableFuncotation.create(Collections.singletonList("TESTFIELD"), Collections.singletonList("TESTVAL"), Allele.create("A", false), "OneField", null),
                     "table_TESTFIELD"
                 },
                 {
-                    new TableFuncotation(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields"),
+                    TableFuncotation.create(Arrays.asList("TESTFIELD1", "TESTFIELD2", "TESTFIELD3"), Arrays.asList("TESTVAL1", "TESTVAL2", "TESTVAL3"), Allele.create("A", false), "ThreeFields", null),
                     "TESTFIELD4"
                 },
         };
@@ -243,7 +241,7 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
 
         final String fieldName = "PLACEHOLDER";
 
-        final TableFuncotation funcotation = new TableFuncotation( Collections.singletonList(fieldName), Collections.singletonList(fieldValue), Allele.create("A", false), fieldName );
+        final TableFuncotation funcotation = TableFuncotation.create( Collections.singletonList(fieldName), Collections.singletonList(fieldValue), Allele.create("A", false), fieldName , null);
         Assert.assertEquals( funcotation.get(fieldName), fieldValue );
     }
 
@@ -263,18 +261,18 @@ public class TableFuncotationUnitTest extends GATKBaseTest {
     @Test(dataProvider = "provideForTestSerializeToVcfString")
     public void testSerializeToVcfString(final TableFuncotation funcotation,
                                          final String expected) {
-        Assert.assertEquals( funcotation.serializeToVcfString(), expected );
+        Assert.assertEquals(FuncotatorUtils.renderSanitizedFuncotationForVcf(funcotation, new ArrayList<>(funcotation.getFieldNames())), expected );
     }
 
     @Test(dataProvider = "provideListOfStrings")
     public void testKeySet(final List<String> kvNames) {
-        final TableFuncotation funcotation = new TableFuncotation(kvNames, kvNames.stream().map(s -> s + "VVV").collect(Collectors.toList()), Allele.create("A", false), "ListFuncotation");
+        final TableFuncotation funcotation = TableFuncotation.create(kvNames, kvNames.stream().map(s -> s + "VVV").collect(Collectors.toList()), Allele.create("A", false), "ListFuncotation", null);
         Assert.assertEquals( funcotation.keySet(), kvNames);
     }
 
     @Test(dataProvider = "provideListOfStrings")
     public void testValues(final List<String> kvNames) {
-        final TableFuncotation funcotation = new TableFuncotation(kvNames.stream().map(s -> s + "KEY").collect(Collectors.toList()), kvNames, Allele.create("A", false), "ListFuncotation");
+        final TableFuncotation funcotation = TableFuncotation.create(kvNames.stream().map(s -> s + "KEY").collect(Collectors.toList()), kvNames, Allele.create("A", false), "ListFuncotation", null);
         Assert.assertEquals( funcotation.values(), kvNames);
     }
 

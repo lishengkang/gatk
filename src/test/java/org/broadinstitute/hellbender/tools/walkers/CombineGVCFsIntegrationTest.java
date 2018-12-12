@@ -1,34 +1,26 @@
 package org.broadinstitute.hellbender.tools.walkers;
 
 import htsjdk.samtools.seekablestream.SeekablePathStream;
-import htsjdk.tribble.readers.LineIterator;
-import htsjdk.tribble.readers.PositionalBufferedStream;
-import htsjdk.variant.vcf.VCFCodec;
+import htsjdk.variant.utils.VCFHeaderReader;
 import htsjdk.variant.vcf.VCFHeader;
 import org.apache.commons.codec.digest.DigestUtils;
 import htsjdk.variant.variantcontext.VariantContext;
 import org.apache.commons.collections.IteratorUtils;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
+import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.runtime.ProcessController;
 import org.broadinstitute.hellbender.utils.runtime.ProcessOutput;
 import org.broadinstitute.hellbender.utils.runtime.ProcessSettings;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.VariantContextTestUtils;
-import org.seqdoop.hadoop_bam.util.VCFHeaderReader;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardCopyOption;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -39,6 +31,11 @@ import java.util.stream.Collectors;
 
 public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
     private static final List<String> NO_EXTRA_ARGS = Collections.emptyList();
+    private static final List<String> ATTRIBUTES_TO_IGNORE = Arrays.asList(
+            "RAW_MQ", //MQ data format and key have changed since GATK3
+            "PS"); //PS format field was added in GATK4
+    private static final File NA12878_HG37 = new File(toolsTestDir + "haplotypecaller/expected.testGVCFMode.gatk4.g.vcf");
+
 
     private static <T> void assertForEachElementInLists(final List<T> actual, final List<T> expected, final BiConsumer<T, T> assertion) {
         Assert.assertEquals(actual.size(), expected.size(), "different number of elements in lists:\n"
@@ -80,6 +77,12 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
                 {new File[]{getTestFile("NA12878.AS.chr20snippet.g.vcf"), getTestFile("NA12892.AS.chr20snippet.g.vcf")}, getTestFile("testAlleleSpecificAnnotationsNoGroup.vcf"), Arrays.asList("-G", "Standard", "-G", "AS_Standard"), b37_reference_20_21},
                 //Test that trailing reference blocks are emitted with correct intervals
                 {new File[]{getTestFile("gvcfExample1WithTrailingReferenceBlocks.g.vcf"), getTestFile("gvcfExample2WithTrailingReferenceBlocks.g.vcf")}, getTestFile("gvcfWithTrailingReferenceBlocksExpected.g.vcf"), NO_EXTRA_ARGS, b38_reference_20_21},
+                // same test as the previous one, except with a band multiple specified
+                {new File[]{getTestFile("gvcfExample1WithTrailingReferenceBlocks.g.vcf"), getTestFile("gvcfExample2WithTrailingReferenceBlocks.g.vcf")},
+                        getTestFile("gvcfWithTrailingReferenceBlocksBandedExpected.g.vcf"),
+                        Arrays.asList("--" + CombineGVCFs.BREAK_BANDS_LONG_NAME, "2000000"),
+                        b38_reference_20_21},
+                {new File[]{NA12878_HG37, getTestFile("YRIoffspring.chr20snippet.g.vcf")}, getTestFile("newMQcalc.combined.g.vcf"), NO_EXTRA_ARGS, b37_reference_20_21},
         };
     }
 
@@ -125,12 +128,12 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
             System.out.println("Found precomputed gatk3Result");
         }
 
-        assertVariantContextsMatch(Arrays.asList(inputs), gatk3Result, extraArgs, reference);
+        assertVariantContextsMatch(Arrays.asList(inputs), gatk3Result, extraArgs, reference, ATTRIBUTES_TO_IGNORE);
     }
 
     @Test(dataProvider = "gvcfsToCombine")
     public void compareToGATK3ExpectedResults(File[] inputs, File outputFile, List<String> extraArgs, String reference) throws IOException, NoSuchAlgorithmException {
-        assertVariantContextsMatch(Arrays.asList(inputs), outputFile, extraArgs, reference);
+        assertVariantContextsMatch(Arrays.asList(inputs), outputFile, extraArgs, reference, ATTRIBUTES_TO_IGNORE);
     }
 
     public static void runProcess(ProcessController processController, String[] command) {
@@ -142,14 +145,14 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
     }
 
 
-
-    private void assertVariantContextsMatch(List<File> inputs, File expected, List<String> extraArgs, String reference) throws IOException {
+    public void assertVariantContextsMatch(List<File> inputs, File expected, List<String> extraArgs, String reference, List<String> attributesToIgnore) throws IOException {
         final VCFHeader header = getHeaderFromFile(expected);
 
         runCombineGVCFSandAssertSomething(inputs, expected, extraArgs, (a, e) -> {
-            VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, Arrays.asList(), header);
+            VariantContextTestUtils.assertVariantContextsAreEqualAlleleOrderIndependent(a, e, attributesToIgnore, header);
         }, reference);
     }
+
 
     public void runCombineGVCFSandAssertSomething(List<File> inputs, File expected, List<String> additionalArguments, BiConsumer<VariantContext, VariantContext> assertion, String reference) throws IOException {
         final File output = createTempFile("combinegvcfs", ".vcf");
@@ -411,4 +414,14 @@ public class CombineGVCFsIntegrationTest extends CommandLineProgramTest {
         Assert.assertEquals(nextcromlast.getGenotypes().size(), 2);
     }
 
+    /** Should throw a BadInput exception as combining GVCFs with MNPs is unsupported. */
+    @Test(expectedExceptions={UserException.BadInput.class})
+    public void testCombineGvcfsWithMnps() throws Exception {
+        final File output = createTempFile("combinegvcfs", ".vcf");
+        final ArgumentsBuilder args = new ArgumentsBuilder();
+        args.addReference(new File(b37_reference_20_21));
+        args.addOutput(output);
+        args.addVCF(getTestFile("mnp.g.vcf"));
+        runCommandLine(args);
+    }
 }

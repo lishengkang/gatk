@@ -81,7 +81,7 @@ import java.util.regex.Pattern;
  *   -R Homo_sapiens_assembly38.fasta \
  *   -V input.vcf.gz \
  *   -O output.vcf.gz \
- *   --ts_filter_level 99.0 \
+ *   --truth-sensitivity-filter-level 99.0 \
  *   --tranches-file output.tranches \
  *   --recal-file output.recal \
  *   -mode SNP
@@ -94,7 +94,7 @@ import java.util.regex.Pattern;
  *   -V input.vcf.gz \
  *   -O output.vcf.gz \
  *   -AS \
- *   --ts_filter_level 99.0 \
+ *   --truth-sensitivity-filter-level 99.0 \
  *   --tranches-file output.AS.tranches \
  *   --recal-file output.AS.recal \
  *   -mode SNP 
@@ -171,7 +171,7 @@ public class ApplyVQSR extends MultiVariantWalker {
     protected Double VQSLOD_CUTOFF = null;
 
     /**
-     * For this to work properly, the -ignoreFilter argument should also be applied to the VariantRecalibration command.
+     * For this to work properly, the --ignore-filter argument should also be applied to the VariantRecalibration command.
      */
     @Argument(fullName="ignore-filter", doc="If specified, the recalibration will be applied to variants marked as filtered by the specified filter name in the input VCF file", optional=true)
     private List<String> IGNORE_INPUT_FILTERS = new ArrayList<>();
@@ -246,7 +246,7 @@ public class ApplyVQSR extends MultiVariantWalker {
         if( TS_FILTER_LEVEL != null ) {
             // if the user specifies both ts_filter_level and lodCutoff then throw a user error
             if( VQSLOD_CUTOFF != null ) {
-                throw new UserException("Arguments --ts_filter_level and --lodCutoff are mutually exclusive. Please only specify one option.");
+                throw new UserException("Arguments --truth-sensitivity-filter-level and --lod-score-cutoff are mutually exclusive. Please only specify one option.");
             }
 
             if( tranches.size() >= 2 ) {

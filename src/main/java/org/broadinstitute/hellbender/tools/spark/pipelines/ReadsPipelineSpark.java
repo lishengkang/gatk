@@ -1,25 +1,26 @@
 package org.broadinstitute.hellbender.tools.spark.pipelines;
 
 import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.SAMSequenceDictionary;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
-import org.apache.spark.storage.StorageLevel;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.cmdline.argumentcollections.MarkDuplicatesSparkArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscoveryProgramGroup;
-import org.broadinstitute.hellbender.engine.ReadContextData;
+import org.broadinstitute.hellbender.engine.Shard;
+import org.broadinstitute.hellbender.engine.ShardBoundary;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
-import org.broadinstitute.hellbender.engine.spark.AddContextDataToReadSpark;
+import org.broadinstitute.hellbender.engine.spark.AssemblyRegionArgumentCollection;
+import org.broadinstitute.hellbender.engine.spark.AssemblyRegionReadShardArgumentCollection;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
-import org.broadinstitute.hellbender.engine.spark.JoinStrategy;
-import org.broadinstitute.hellbender.engine.spark.datasources.VariantsSparkSource;
-import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.spark.JoinReadsWithVariants;
 import org.broadinstitute.hellbender.tools.ApplyBQSRUniqueArgumentCollection;
 import org.broadinstitute.hellbender.tools.HaplotypeCallerSpark;
 import org.broadinstitute.hellbender.tools.spark.bwa.BwaArgumentCollection;
@@ -27,22 +28,23 @@ import org.broadinstitute.hellbender.tools.spark.bwa.BwaSparkEngine;
 import org.broadinstitute.hellbender.tools.spark.transforms.ApplyBQSRSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.BaseRecalibratorSparkFn;
 import org.broadinstitute.hellbender.tools.spark.transforms.markduplicates.MarkDuplicatesSpark;
+import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.tools.walkers.bqsr.BaseRecalibrator;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerEngine;
+import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.ReferenceConfidenceMode;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
-import org.broadinstitute.hellbender.utils.SerializableFunction;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.read.markduplicates.MarkDuplicatesScoringStrategy;
-import org.broadinstitute.hellbender.utils.read.markduplicates.OpticalDuplicateFinder;
-import org.broadinstitute.hellbender.utils.recalibration.BaseRecalibrationEngine;
 import org.broadinstitute.hellbender.utils.recalibration.RecalibrationArgumentCollection;
 import org.broadinstitute.hellbender.utils.recalibration.RecalibrationReport;
 import org.broadinstitute.hellbender.utils.spark.SparkUtils;
 import org.broadinstitute.hellbender.utils.variant.GATKVariant;
+import picard.sam.markduplicates.util.OpticalDuplicateFinder;
 
+import java.util.Collection;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * ReadsPipelineSpark is our standard pipeline that takes unaligned or aligned reads and runs BWA (if specified), MarkDuplicates,
@@ -68,7 +70,7 @@ import java.util.List;
  *   -I gs://my-gcs-bucket/unaligned_reads.bam \
  *   -R gs://my-gcs-bucket/reference.fasta \
  *   --known-sites gs://my-gcs-bucket/sites_of_variation.vcf \
- *   -align
+ *   --align
  *   -O gs://my-gcs-bucket/output.vcf \
  *   -- \
  *   --sparkRunner GCS \
@@ -100,7 +102,7 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     private boolean align;
 
     @Argument(doc = "the known variants", fullName = BaseRecalibrator.KNOWN_SITES_ARG_FULL_NAME, optional = false)
-    protected List<String> baseRecalibrationKnownVariants;
+    protected List<String> knownVariants;
 
     @Argument(doc = "the output vcf", shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME, optional = false)
@@ -109,14 +111,11 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @Argument(doc = "the output bam", fullName = "output-bam", optional = true)
     protected String outputBam;
 
-    @Argument(doc = "the join strategy for reference bases and known variants", fullName = "join-strategy", optional = true)
-    private JoinStrategy joinStrategy = JoinStrategy.BROADCAST;
+    @ArgumentCollection
+    protected MarkDuplicatesSparkArgumentCollection markDuplicatesSparkArgumentCollection = new MarkDuplicatesSparkArgumentCollection();
 
     @ArgumentCollection
     public final BwaArgumentCollection bwaArgs = new BwaArgumentCollection();
-
-    @Argument(shortName = "DS", fullName ="duplicates-scoring-strategy", doc = "The scoring strategy for choosing the non-duplicate among candidates.")
-    public MarkDuplicatesScoringStrategy duplicatesScoringStrategy = MarkDuplicatesScoringStrategy.SUM_OF_BASE_QUALITIES;
 
     /**
      * all the command line arguments for BQSR and its covariates
@@ -125,7 +124,10 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     private final RecalibrationArgumentCollection bqsrArgs = new RecalibrationArgumentCollection();
 
     @ArgumentCollection
-    public final HaplotypeCallerSpark.ShardingArgumentCollection shardingArgs = new HaplotypeCallerSpark.ShardingArgumentCollection();
+    public final AssemblyRegionReadShardArgumentCollection shardingArgs = new AssemblyRegionReadShardArgumentCollection();
+
+    @ArgumentCollection
+    public final AssemblyRegionArgumentCollection assemblyRegionArgs = new HaplotypeCallerSpark.HaplotypeCallerAssemblyRegionArgumentCollection();
 
     /**
      * command-line arguments to fine tune the apply BQSR step.
@@ -136,16 +138,34 @@ public class ReadsPipelineSpark extends GATKSparkTool {
     @ArgumentCollection
     public HaplotypeCallerArgumentCollection hcArgs = new HaplotypeCallerArgumentCollection();
 
+    @Argument(doc = "whether to use the strict implementation or not (defaults to the faster implementation that doesn't strictly match the walker version)", fullName = "strict", optional = true)
+    public boolean strict = false;
+
     @Override
-    public SerializableFunction<GATKRead, SimpleInterval> getReferenceWindowFunction() {
-        return BaseRecalibrationEngine.BQSR_REFERENCE_WINDOW_FUNCTION;
+    public boolean useVariantAnnotations() { return true;}
+
+    @Override
+    public List<Class<? extends Annotation>> getDefaultVariantAnnotationGroups() { return HaplotypeCallerEngine.getStandardHaplotypeCallerAnnotationGroups();}
+
+    @Override
+    public Collection<Annotation> makeVariantAnnotations() {
+        final boolean referenceConfidenceMode = hcArgs.emitReferenceConfidence != ReferenceConfidenceMode.NONE;
+        final Collection<Annotation> annotations = super.makeVariantAnnotations();
+        return referenceConfidenceMode? HaplotypeCallerEngine.filterReferenceConfidenceAnnotations(annotations): annotations;
+    }
+
+    @Override
+    protected void validateSequenceDictionaries(){
+        //don't validate unaligned reads because we don't require them to have a sequence dictionary
+        if( !align ){
+            super.validateSequenceDictionaries();
+        }
     }
 
     @Override
     protected void runTool(final JavaSparkContext ctx) {
-        if (joinStrategy == JoinStrategy.BROADCAST && ! getReference().isCompatibleWithSparkBroadcast()){
-            throw new UserException.Require2BitReferenceForBroadcast();
-        }
+        String referenceFileName = addReferenceFilesForSpark(ctx, referenceArguments.getReferenceFileName());
+        List<String> localKnownSitesFilePaths = addVCFsForSpark(ctx, knownVariants);
 
         final JavaRDD<GATKRead> alignedReads;
         final SAMFileHeader header;
@@ -166,8 +186,12 @@ public class ReadsPipelineSpark extends GATKSparkTool {
             header = getHeaderForReads();
         }
 
-        final JavaRDD<GATKRead> markedReadsWithOD = MarkDuplicatesSpark.mark(alignedReads, header, duplicatesScoringStrategy, new OpticalDuplicateFinder(), getRecommendedNumReducers());
-        final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.cleanupTemporaryAttributes(markedReadsWithOD);
+        final JavaRDD<GATKRead> markedReads = MarkDuplicatesSpark.mark(alignedReads, header, new OpticalDuplicateFinder(), markDuplicatesSparkArgumentCollection, getRecommendedNumReducers());
+
+        // always coordinate-sort reads so BQSR can use queryLookaheadBases in FeatureDataSource
+        final SAMFileHeader readsHeader = header.clone();
+        readsHeader.setSortOrder(SAMFileHeader.SortOrder.coordinate);
+        final JavaRDD<GATKRead> sortedMarkedReads = SparkUtils.sortReadsAccordingToHeader(markedReads, readsHeader, numReducers);
 
         // The markedReads have already had the WellformedReadFilter applied to them, which
         // is all the filtering that MarkDupes and ApplyBQSR want. BQSR itself wants additional
@@ -175,23 +199,13 @@ public class ReadsPipelineSpark extends GATKSparkTool {
         //NOTE: this doesn't honor enabled/disabled commandline filters
         final ReadFilter bqsrReadFilter = ReadFilter.fromList(BaseRecalibrator.getBQSRSpecificReadFilterList(), header);
 
-        JavaRDD<GATKRead> markedFilteredReadsForBQSR = markedReads.filter(read -> bqsrReadFilter.test(read));
+        JavaRDD<GATKRead> markedFilteredReadsForBQSR = sortedMarkedReads.filter(bqsrReadFilter::test);
 
-        if (joinStrategy.equals(JoinStrategy.OVERLAPS_PARTITIONER)) {
-            // the overlaps partitioner requires that reads are coordinate-sorted
-            final SAMFileHeader readsHeader = header.clone();
-            readsHeader.setSortOrder(SAMFileHeader.SortOrder.coordinate);
-            markedFilteredReadsForBQSR = SparkUtils.coordinateSortReads(markedFilteredReadsForBQSR, readsHeader, numReducers);
-        }
-
-        VariantsSparkSource variantsSparkSource = new VariantsSparkSource(ctx);
-        JavaRDD<GATKVariant> bqsrKnownVariants = variantsSparkSource.getParallelVariants(baseRecalibrationKnownVariants, getIntervals());
-
-        JavaPairRDD<GATKRead, ReadContextData> rddReadContext = AddContextDataToReadSpark.add(ctx, markedFilteredReadsForBQSR, getReference(), bqsrKnownVariants, baseRecalibrationKnownVariants, joinStrategy, header.getSequenceDictionary(), shardingArgs.readShardSize, shardingArgs.readShardPadding);
-        final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(rddReadContext, header, getReferenceSequenceDictionary(), bqsrArgs);
+        JavaPairRDD<GATKRead, Iterable<GATKVariant>> readsWithVariants = JoinReadsWithVariants.join(markedFilteredReadsForBQSR, localKnownSitesFilePaths);
+        final RecalibrationReport bqsrReport = BaseRecalibratorSparkFn.apply(readsWithVariants, getHeaderForReads(), referenceFileName, bqsrArgs);
 
         final Broadcast<RecalibrationReport> reportBroadcast = ctx.broadcast(bqsrReport);
-        final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(markedReads, reportBroadcast, header, applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
+        final JavaRDD<GATKRead> finalReads = ApplyBQSRSparkFn.apply(sortedMarkedReads, reportBroadcast, getHeaderForReads(), applyBqsrArgs.toApplyBQSRArgumentCollection(bqsrArgs.PRESERVE_QSCORES_LESS_THAN));
 
         if (outputBam != null) { // only write output of BQSR if output BAM is specified
             writeReads(ctx, outputBam, finalReads, header);
@@ -199,10 +213,15 @@ public class ReadsPipelineSpark extends GATKSparkTool {
 
         // Run Haplotype Caller
         final ReadFilter hcReadFilter = ReadFilter.fromList(HaplotypeCallerEngine.makeStandardHCReadFilters(), header);
-        final JavaRDD<GATKRead> filteredReadsForHC = finalReads.filter(read -> hcReadFilter.test(read));
-        filteredReadsForHC.persist(StorageLevel.DISK_ONLY()); // without caching, computations are run twice as a side effect of finding partition boundaries for sorting
-        final List<SimpleInterval> intervals = hasIntervals() ? getIntervals() : IntervalUtils.getAllIntervalsForReference(header.getSequenceDictionary());
-        HaplotypeCallerSpark.callVariantsWithHaplotypeCallerAndWriteOutput(ctx, filteredReadsForHC, header, getReference(), intervals, hcArgs, shardingArgs, numReducers, output);
+        final JavaRDD<GATKRead> filteredReadsForHC = finalReads.filter(hcReadFilter::test);
+        final List<SimpleInterval> intervals = hasUserSuppliedIntervals() ? getIntervals() : IntervalUtils.getAllIntervalsForReference(header.getSequenceDictionary());
+
+        SAMSequenceDictionary sequenceDictionary = getBestAvailableSequenceDictionary();
+        List<ShardBoundary> intervalShards = intervals.stream()
+                .flatMap(interval -> Shard.divideIntervalIntoShards(interval, shardingArgs.readShardSize, shardingArgs.readShardPadding, sequenceDictionary).stream())
+                .collect(Collectors.toList());
+
+        HaplotypeCallerSpark.callVariantsWithHaplotypeCallerAndWriteOutput(ctx, filteredReadsForHC, readsHeader, sequenceDictionary, referenceArguments.getReferenceFileName(), intervalShards, hcArgs, shardingArgs, assemblyRegionArgs, true, output, makeVariantAnnotations(), logger, strict);
 
         if (bwaEngine != null) {
             bwaEngine.close();

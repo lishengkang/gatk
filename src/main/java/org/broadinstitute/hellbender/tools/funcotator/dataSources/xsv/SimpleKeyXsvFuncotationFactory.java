@@ -107,6 +107,20 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
                                           final LinkedHashMap<String, String> annotationOverrides,
                                           final int numHeaderLinesToIgnore,
                                           final boolean permissiveColumns ) {
+        this(name, filePath, version, delim, keyColumn, keyType, annotationOverrides, numHeaderLinesToIgnore, permissiveColumns, false);
+    }
+
+    public SimpleKeyXsvFuncotationFactory(final String name,
+                                          final Path filePath,
+                                          final String version,
+                                          final String delim,
+                                          final int keyColumn,
+                                          final XsvDataKeyType keyType,
+                                          final LinkedHashMap<String, String> annotationOverrides,
+                                          final int numHeaderLinesToIgnore,
+                                          final boolean permissiveColumns,
+                                          final boolean isDataSourceB37) {
+
         this.name = name;
 
         delimiter = delim;
@@ -120,6 +134,8 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
 
         this.numHeaderLinesToIgnore = numHeaderLinesToIgnore;
 
+        this.dataSourceIsB37 = isDataSourceB37;
+
         // Initialize our annotations map:
         annotationMap = new HashMap<>();
 
@@ -130,7 +146,7 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
             final Iterator<String> it = pathLineIterator.iterator();
 
             // Get our column names:
-            annotationColumnNames = createColumnNames( it, numHeaderLinesToIgnore );
+            annotationColumnNames = createColumnNames(it, numHeaderLinesToIgnore);
 
             // Populate our empty annotation list:
             emptyAnnotationList = new ArrayList<>(annotationColumnNames.size());
@@ -139,7 +155,7 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
             }
 
             // Populate our annotation map:
-            populateAnnotationMap( it, permissiveColumns );
+            populateAnnotationMap(it, permissiveColumns);
         }
 
         // Initialize overrides / defaults:
@@ -150,7 +166,7 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
     // Override Methods:
 
     @Override
-    protected Class<? extends Feature> getAnnotationFeatureClass() {
+    public Class<? extends Feature> getAnnotationFeatureClass() {
         // Returning Feature.class here implies that this class doesn't care about what features it gets.
         return Feature.class;
     }
@@ -215,7 +231,7 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
             if ( annotations != null ) {
                 // Create 1 annotation for each alt allele and add our annotations to the list:
                 for ( final Allele altAllele : variant.getAlternateAlleles() ) {
-                    outputFuncotations.add(new TableFuncotation(annotationColumnNames, annotations, altAllele, name));
+                    outputFuncotations.add(TableFuncotation.create(annotationColumnNames, annotations, altAllele, name, null));
                     annotatedAltAlleles.add(altAllele);
                 }
             }
@@ -249,7 +265,7 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
 
         for ( final Allele altAllele : alternateAlleles ) {
             if ( !annotatedAltAlleles.contains(altAllele) ) {
-                funcotationList.add(new TableFuncotation(annotationColumnNames, emptyAnnotationList, altAllele, name));
+                funcotationList.add(TableFuncotation.create(annotationColumnNames, emptyAnnotationList, altAllele, name, null));
             }
         }
 
@@ -320,7 +336,9 @@ public class SimpleKeyXsvFuncotationFactory extends DataSourceFuncotationFactory
                     throw new UserException.MalformedFile("File contains an empty line (" + dataRowNum + ").  All lines must have data.");
             }
 
-            final List<String> dataRow = new ArrayList<>( Arrays.asList(rawRow.split(delimiter)) );
+            // The use of Utils.split is NECESSARY here because delimiter could potentially evaluate
+            // as a regular expression (as in the case of '|').
+            final List<String> dataRow = Utils.split(rawRow, delimiter);
 
             // Remove the key column:
             final String rowKey = dataRow.remove(keyColumn);

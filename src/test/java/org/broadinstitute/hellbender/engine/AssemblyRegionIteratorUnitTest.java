@@ -2,11 +2,13 @@ package org.broadinstitute.hellbender.engine;
 
 import com.google.common.collect.Lists;
 import htsjdk.samtools.SAMSequenceDictionary;
+import htsjdk.samtools.reference.ReferenceSequenceFile;
 import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.engine.filters.CountingReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
 import org.broadinstitute.hellbender.engine.filters.ReadFilterLibrary;
 import org.broadinstitute.hellbender.engine.filters.WellformedReadFilter;
+import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerArgumentCollection;
 import org.broadinstitute.hellbender.tools.walkers.haplotypecaller.HaplotypeCallerEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
@@ -21,7 +23,6 @@ import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -54,11 +55,15 @@ public class AssemblyRegionIteratorUnitTest extends GATKBaseTest {
      */
     @Test(dataProvider = "testCorrectRegionsHaveCorrectReadsAndSizeData")
     public void testRegionsHaveCorrectReadsAndSize( final String reads, final String reference, final List<SimpleInterval> shardIntervals, final int minRegionSize, final int maxRegionSize, final int assemblyRegionPadding ) throws IOException {
-        try ( final ReadsDataSource readsSource = new ReadsDataSource(IOUtils.getPath(reads));
-              final ReferenceDataSource refSource = ReferenceDataSource.of(IOUtils.getPath(reference)) ) {
+        try (final ReadsDataSource readsSource = new ReadsDataSource(IOUtils.getPath(reads));
+             final ReferenceDataSource refSource = ReferenceDataSource.of(IOUtils.getPath(reference));
+             final ReferenceSequenceFile referenceReader = new CachingIndexedFastaSequenceFile(IOUtils.getPath(b37_reference_20_21));
+        ) {
             final SAMSequenceDictionary readsDictionary = readsSource.getSequenceDictionary();
             final MultiIntervalLocalReadShard readShard = new MultiIntervalLocalReadShard(shardIntervals, assemblyRegionPadding, readsSource);
-            final AssemblyRegionEvaluator evaluator = new HaplotypeCallerEngine(new HaplotypeCallerArgumentCollection(), false, false, readsSource.getHeader(), new CachingIndexedFastaSequenceFile(IOUtils.getPath(b37_reference_20_21)));
+            final HaplotypeCallerArgumentCollection hcArgs = new HaplotypeCallerArgumentCollection();
+            final AssemblyRegionEvaluator evaluator = new HaplotypeCallerEngine(hcArgs, false, false, readsSource.getHeader(),
+                                                                                referenceReader, new VariantAnnotatorEngine(new ArrayList<>(), hcArgs.dbsnp.dbsnp, hcArgs.comps, false));
             final ReadCoordinateComparator readComparator = new ReadCoordinateComparator(readsSource.getHeader());
 
             final List<ReadFilter> readFilters = new ArrayList<>(2);

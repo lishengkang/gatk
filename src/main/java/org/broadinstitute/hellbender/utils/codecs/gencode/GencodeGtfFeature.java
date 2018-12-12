@@ -4,6 +4,7 @@ import com.google.common.annotations.VisibleForTesting;
 import htsjdk.samtools.util.Locatable;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.annotation.Strand;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.exceptions.UserException;
@@ -108,23 +109,26 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
         // But we need to match up the field names to the fields themselves:
         for ( final String extraField : extraFields ) {
 
-            final String[] fieldParts = extraField.trim().split(EXTRA_FIELD_KEY_VALUE_SPLITTER);
-
-            if ( fieldParts.length == 1 ){
-                if ( fieldParts[EXTRA_FIELD_KEY_INDEX].isEmpty() ){
-                    continue;
-                }
-                else {
-                    throw new UserException.MalformedFile("Extraneous optional field data - not in a key/value pair: " + extraField);
-                }
+            final String trimmedExtraField = extraField.trim();
+            if (trimmedExtraField.isEmpty()) {
+                continue;
             }
 
-            // Each optional field is in a key/value pair:
-            final String fieldName = fieldParts[EXTRA_FIELD_KEY_INDEX].trim();
+            final int splitPoint = trimmedExtraField.indexOf(EXTRA_FIELD_KEY_VALUE_SPLITTER);
+            if( splitPoint == -1 ) {
+                throw new UserException.MalformedFile("Extraneous optional field data - not in a key/value pair: " + extraField);
+            }
+
+            final String fieldName = trimmedExtraField.substring(0, splitPoint).trim();
 
             // The value of the field may be between two quotes.
             // We remove them here.
-            final String fieldValue = fieldParts[EXTRA_FIELD_VALUE_INDEX].trim().replaceAll("\"", "");
+            final String rawFieldValue = trimmedExtraField.substring(splitPoint + 1, trimmedExtraField.length());
+            final String fieldValue = StringUtils.remove(rawFieldValue.trim(), '"');
+
+            if( fieldValue.contains(EXTRA_FIELD_KEY_VALUE_SPLITTER) ){
+                throw new UserException("Expected a key/value pair but found several values " + fieldName + "/" + fieldValue);
+            }
 
             OptionalField<?> optionalField = null;
 
@@ -1103,6 +1107,7 @@ public abstract class GencodeGtfFeature implements Feature, Comparable<GencodeGt
         /** shares an identical CDS but has alternative 3' UTR with respect to a reference variant. */
         ALTERNATIVE_5_UTR("alternative_5_UTR"),
 
+        /** Please note that the ordering of the APPRIS_* tags is also used in sorting here.  Do not re-order. */
         /** Transcript expected to code for the main functional isoform based on a range of protein features (APPRIS pipeline). */
         APPRIS_PRINCIPAL("appris_principal"),
 

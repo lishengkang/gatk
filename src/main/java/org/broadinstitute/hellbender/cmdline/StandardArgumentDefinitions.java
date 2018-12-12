@@ -20,6 +20,7 @@ public final class StandardArgumentDefinitions {
     public static final String READ_VALIDATION_STRINGENCY_LONG_NAME = "read-validation-stringency";
     public static final String ASSUME_SORTED_LONG_NAME = "assume-sorted";
     public static final String DISABLE_TOOL_DEFAULT_ANNOTATIONS = "disable-tool-default-annotations";
+    public static final String ENABLE_ALL_ANNOTATIONS = "enable-all-annotations";
     public static final String CREATE_OUTPUT_BAM_INDEX_LONG_NAME = "create-output-bam-index";
     public static final String CREATE_OUTPUT_BAM_MD5_LONG_NAME = "create-output-bam-md5";
     public static final String CREATE_OUTPUT_VARIANT_INDEX_LONG_NAME = "create-output-variant-index";
@@ -37,6 +38,8 @@ public final class StandardArgumentDefinitions {
     public static final String ANNOTATIONS_TO_EXCLUDE_LONG_NAME = "annotations-to-exclude";
     public static final String SAMPLE_NAME_LONG_NAME = "sample-name";
     public static final String PEDIGREE_FILE_LONG_NAME = "pedigree";
+    public static final String SITES_ONLY_LONG_NAME = "sites-only-vcf-output";
+    public static final String INVALIDATE_PREVIOUS_FILTERS_LONG_NAME = "invalidate-previous-filters";
 
     public static final String INPUT_SHORT_NAME = "I";
     public static final String OUTPUT_SHORT_NAME = "O";
@@ -70,13 +73,18 @@ public final class StandardArgumentDefinitions {
     public static final String BQSR_TABLE_SHORT_NAME = "bqsr";
     public static final String BQSR_TABLE_LONG_NAME = "bqsr-recal-file";
 
+    public static final String DUPLICATE_SCORING_STRATEGY_LONG_NAME = "duplicate-scoring-strategy";
+    public static final String DUPLICATE_SCORING_STRATEGY_SHORT_NAME = "DS";
+    public static final String METRICS_FILE_LONG_NAME = "metrics-file";
+    public static final String METRICS_FILE_SHORT_NAME = "M";
+
     /**
      * The option specifying a main configuration file.
      * This is used in {@link org.broadinstitute.hellbender.Main} to control which config file is loaded.
      */
     public static final String GATK_CONFIG_FILE_OPTION = "gatk-config-file";
 
-    public static final String TMP_DIR_NAME = "TMP_DIR";
+    public static final String TMP_DIR_NAME = "tmp-dir";
     public static final String QUIET_NAME = "QUIET";
     public static final String USE_JDK_DEFLATER_LONG_NAME = "use-jdk-deflater";
     public static final String USE_JDK_DEFLATER_SHORT_NAME = "jdk-deflater";
@@ -84,4 +92,5 @@ public final class StandardArgumentDefinitions {
     public static final String USE_JDK_INFLATER_SHORT_NAME = "jdk-inflater";
     public static final String NIO_MAX_REOPENS_LONG_NAME = "gcs-max-retries";
     public static final String NIO_MAX_REOPENS_SHORT_NAME = "gcs-retries";
+    public static final String NIO_PROJECT_FOR_REQUESTER_PAYS_LONG_NAME = "gcs-project-for-requester-pays";
 }

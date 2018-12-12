@@ -21,14 +21,19 @@ public abstract class AssemblyBasedCallerArgumentCollection extends StandardCall
     public static final String CAPTURE_ASSEMBLY_FAILURE_BAM_LONG_NAME = "capture-assembly-failure-bam";
     public static final String ERROR_CORRECT_READS_LONG_NAME = "error-correct-reads";
     public static final String DO_NOT_RUN_PHYSICAL_PHASING_LONG_NAME = "do-not-run-physical-phasing";
+
     public static final String MIN_BASE_QUALITY_SCORE_LONG_NAME = "min-base-quality-score";
     public static final String SMITH_WATERMAN_LONG_NAME = "smith-waterman";
+    public static final String CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME = "correct-overlapping-quality";
 
     @ArgumentCollection
     public AssemblyRegionTrimmerArgumentCollection assemblyRegionTrimmerArgs = new AssemblyRegionTrimmerArgumentCollection();
 
+    protected boolean useMutectAssemblerArgumentCollection() { return false; }
+
     @ArgumentCollection
-    public ReadThreadingAssemblerArgumentCollection assemblerArgs = new ReadThreadingAssemblerArgumentCollection();
+    public ReadThreadingAssemblerArgumentCollection assemblerArgs = useMutectAssemblerArgumentCollection() ?
+            new MutectReadThreadingAssemblerArgumentCollection() : new HaplotypeCallerReadThreadingAssemblerArgumentCollection();
 
     @ArgumentCollection
     public LikelihoodEngineArgumentCollection likelihoodArgs = new LikelihoodEngineArgumentCollection();
@@ -121,5 +126,8 @@ public abstract class AssemblyBasedCallerArgumentCollection extends StandardCall
     @Advanced
     @Argument(fullName = SMITH_WATERMAN_LONG_NAME, doc = "Which Smith-Waterman implementation to use, generally FASTEST_AVAILABLE is the right choice", optional = true)
     public SmithWatermanAligner.Implementation smithWatermanImplementation = SmithWatermanAligner.Implementation.JAVA;
+
+    @Argument(fullName = CORRECT_OVERLAPPING_BASE_QUALITIES_LONG_NAME)
+    public boolean doNotCorrectOverlappingBaseQualities = false;
 
 }

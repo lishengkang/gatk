@@ -18,22 +18,21 @@ import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Iterator;
-import java.util.List;
-import java.util.ListIterator;
-import java.util.OptionalInt;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
+
 import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
+import org.broadinstitute.hellbender.engine.ReadsContext;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.BaseUtils;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
+import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.read.markduplicates.LibraryIdGenerator;
 import org.broadinstitute.hellbender.utils.recalibration.EventType;
 
 /**
@@ -316,11 +315,19 @@ public final class ReadUtils {
     }
 
     /**
-     * @param read read to check
-     * @return true if the read is paired and has a mapped mate, otherwise false
+     * @param read read to query
+     * @return true if the read has a mate and that mate is mapped, otherwise false
      */
     public static boolean readHasMappedMate( final GATKRead read ) {
         return read.isPaired() && ! read.mateIsUnmapped();
+    }
+
+    /**
+     * @param read read to query
+     * @return true if the read has a mate and that mate is mapped, otherwise false
+     */
+    public static boolean readHasMappedMate( final SAMRecord read ) {
+        return read.getReadPairedFlag() && ! read.getMateUnmappedFlag();
     }
 
     /**
@@ -384,6 +391,58 @@ public final class ReadUtils {
         Utils.nonNull(tag);
         final Integer obj = read.getAttributeAsInteger(tag);
         return obj == null ? OptionalInt.empty() : OptionalInt.of(obj);
+    }
+
+    /**
+     * Helper method for interrogating if a read and its mate (if it exists) are unmapped
+     * @param read a read with mate information to interrogate
+     * @return true if this read and its are unmapped
+     */
+    public static boolean readAndMateAreUnmapped(GATKRead read) {
+        return read.isUnmapped() && (!read.isPaired() || read.mateIsUnmapped());
+    }
+
+    /**
+     * Interrogates the header to determine if the bam is expected to be sorted such that reads with the same name appear in order.
+     * This can correspond to either a queryname sorted bam or a querygrouped bam (unordered readname groups)
+     * @param header header corresponding to the bam file in question
+     * @return true if the header has has the right readname group
+     */
+    public static boolean isReadNameGroupedBam(SAMFileHeader header) {
+        return SAMFileHeader.SortOrder.queryname.equals(header.getSortOrder()) || SAMFileHeader.GroupOrder.query.equals(header.getGroupOrder());
+    }
+
+    /**
+     * Create a map of reads overlapping {@code interval} to their mates by looking for all possible mates within some
+     * maximum fragment size.  This is not guaranteed to find all mates, in particular near structural variant breakpoints
+     * where mates may align far away.
+     *
+     * The algorithm is:
+     * 1) make two maps of read name --> read for reads overlapping {@code interval}, one for first-of-pair reads and one
+     *    for second-of-pair reads.
+     * 2) For all reads in an expanded interval padded by {@code fragmentSize} on both sides look for a read of the same name
+     *    that is second-of-pair if this read is first-of-pair or vice-versa.  If such a read is found then this is that read's mate.
+     *
+     * @param readsContext
+     * @param fragmentSize the maximum distance on either side of {@code interval} to look for mates.
+     * @return a map of reads ot their mates for all reads for which a mate could be found.
+     */
+    public static Map<GATKRead, GATKRead> getReadToMateMap(final ReadsContext readsContext, final int fragmentSize) {
+        final Map<String, GATKRead> readOnes = new HashMap<>();
+        final Map<String, GATKRead> readTwos = new HashMap<>();
+        Utils.stream(readsContext.iterator()).forEach(read -> (read.isFirstOfPair() ? readOnes : readTwos).put(read.getName(), read));
+
+        final Map<GATKRead, GATKRead> result = new HashMap<>();
+        final SimpleInterval originalInterval = readsContext.getInterval();
+        final SimpleInterval expandedInterval = new SimpleInterval(originalInterval.getContig(), Math.max(1, originalInterval.getStart() - fragmentSize), originalInterval.getEnd() + fragmentSize);
+        Utils.stream(readsContext.iterator(expandedInterval)).forEach(mate -> {
+            final GATKRead read = (mate.isFirstOfPair() ? readTwos : readOnes).get(mate.getName());
+            if (read != null) {
+                result.put(read, mate);
+            }
+        });
+
+        return result;
     }
 
     /**
@@ -1034,7 +1093,7 @@ public final class ReadUtils {
     {
         return createCommonSAMWriter(
             (null == outputFile ? null : outputFile.toPath()),
-            referenceFile,
+            null == referenceFile ? null : referenceFile.toPath(),
             header,
             preSorted,
             createOutputBamIndex,
@@ -1055,7 +1114,7 @@ public final class ReadUtils {
      */
     public static SAMFileWriter createCommonSAMWriter(
         final Path outputPath,
-        final File referenceFile,
+        final Path referenceFile,
         final SAMFileHeader header,
         final boolean preSorted,
         boolean createOutputBamIndex,
@@ -1093,7 +1152,7 @@ public final class ReadUtils {
             final boolean preSorted)
     {
         return createCommonSAMWriterFromFactory(factory,
-            Utils.nonNull(outputFile).toPath(), referenceFile, header, preSorted);
+            Utils.nonNull(outputFile).toPath(), referenceFile == null ? null : referenceFile.toPath(), header, preSorted);
     }
 
     /**
@@ -1111,7 +1170,7 @@ public final class ReadUtils {
     public static SAMFileWriter createCommonSAMWriterFromFactory(
         final SAMFileWriterFactory factory,
         final Path outputPath,
-        final File referenceFile,
+        final Path referenceFile,
         final SAMFileHeader header,
         final boolean preSorted,
         OpenOption... openOptions)
@@ -1413,5 +1472,28 @@ public final class ReadUtils {
                 return read.getLength() - offset + CigarUtils.countRightHardClippedBases(read.getCigar());
             }
         }
+    }
+
+    /**
+     * @param read a GATK read
+     * @return true if the read is F2R1, false otherwise
+     */
+    public static boolean isF2R1(final GATKRead read) {
+        return read.isReverseStrand() == read.isFirstOfPair();
+    }
+
+    /**
+     * @param read a GATK read
+     * @return true if the read is F1R2, false otherwise
+     */
+    public static boolean isF1R2(final GATKRead read) {
+        return read.isReverseStrand() != read.isFirstOfPair();
+    }
+
+    /**
+     * Used to be called isUsableRead()
+     **/
+    public static boolean readHasReasonableMQ(final GATKRead read){
+        return read.getMappingQuality() != 0 && read.getMappingQuality() != QualityUtils.MAPPING_QUALITY_UNAVAILABLE;
     }
 }

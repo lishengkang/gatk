@@ -20,6 +20,7 @@ import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.sv.evidence.IntervalCoverageFinder.CandidateCoverageInterval;
 import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.FindBreakpointEvidenceSparkArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.sv.evidence.BreakpointEvidence.ExternalEvidence;
@@ -130,6 +131,8 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
     @Override
     protected void runTool( final JavaSparkContext ctx ) {
 
+        validateParams();
+
         gatherEvidenceAndWriteContigSamFile(ctx, params, getHeaderForReads(), getUnfilteredReads(),
                 outputAssemblyAlignments, logger);
 
@@ -179,7 +182,7 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
                 new FermiLiteAssemblyHandler(params.alignerIndexImageFile, params.maxFASTQSize,
                                                 params.fastqDir, params.writeGFAs,
                                                 params.popVariantBubbles, params.removeShadowedContigs,
-                                                params.expandAssemblyGraph);
+                                                params.expandAssemblyGraph, params.zDropoff);
         alignedAssemblyOrExcuseList.addAll(
                 handleAssemblies(ctx, qNamesMultiMap, unfilteredReads, filter, intervals.size(),
                         params.includeMappingLocation, fermiLiteAssemblyHandler));
@@ -199,6 +202,13 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
 
         return new AssembledEvidenceResults(evidenceScanResults.readMetadata, intervals, alignedAssemblyOrExcuseList,
                                             evidenceScanResults.evidenceTargetLinks);
+    }
+
+    private void validateParams() {
+        if( !(outputAssemblyAlignments.endsWith(".bam") || outputAssemblyAlignments.endsWith(".sam")) )
+                throw new UserException("Output assembly alignments does not end with \".bam\" or \".sam\": " + outputAssemblyAlignments);
+
+        params.validate();
     }
 
     public static final class AssembledEvidenceResults {
@@ -827,21 +837,24 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         final int minFlankingHighCovFactor = params.highDepthCoverageFactor;
         final int minPeakHighCovFactor = params.highDepthCoveragePeakFactor;
 
-        int minFlankingHighCoverageValue = (int) (minFlankingHighCovFactor * broadcastMetadata.getValue().getCoverage());
-        int minPeakHighCoverageValue = (int) (minPeakHighCovFactor * broadcastMetadata.getValue().getCoverage());
+        final ReadMetadata shortReadMetadata = broadcastMetadata.getValue();
+        int minFlankingHighCoverageValue = (int) (minFlankingHighCovFactor * shortReadMetadata.getCoverage());
+        int minPeakHighCoverageValue = (int) (minPeakHighCovFactor * shortReadMetadata.getCoverage());
         final List<SVInterval> result =
                 findHighCoverageSubIntervals(ctx, broadcastMetadata, intervals, unfilteredReads,
                         filter,
                         minFlankingHighCoverageValue,
                         minPeakHighCoverageValue);
-        log("Found " + result.size() + " sub-intervals with coverage over " + minFlankingHighCoverageValue + " and a peak coverage of over " + minPeakHighCoverageValue + ".", logger);
+        log("Found " + result.size() + " sub-intervals with coverage over " + minFlankingHighCoverageValue +
+                " and a peak coverage of over " + minPeakHighCoverageValue + ".", logger);
 
         final String intervalFile = params.highCoverageIntervalsFile;
         if (intervalFile != null) {
             try (final OutputStreamWriter writer =
                          new OutputStreamWriter(new BufferedOutputStream(BucketUtils.createFile(intervalFile)))) {
-                for (SVInterval i : result) {
-                    writer.write(i.toBedString(broadcastMetadata.getValue()) + "\n");
+                for (final SVInterval svInterval : result) {
+                    final String bedLine = shortReadMetadata.getContigName(svInterval.getContig()) + "\t" + (svInterval.getStart() - 1) + "\t" + svInterval.getEnd() + "\n";
+                    writer.write(bedLine);
                 }
             } catch (final IOException ioe) {
                 throw new UserException.CouldNotCreateOutputFile("Can't write high coverage intervals file " + intervalFile, ioe);
@@ -971,8 +984,6 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
             final Logger logger, final Broadcast<SVIntervalTree<SVInterval>> highCoverageSubintervalTree) {
         // find all breakpoint evidence, then filter for pile-ups
         final int nContigs = header.getSequenceDictionary().getSequences().size();
-        final int minEvidenceWeight = params.minEvidenceWeight;
-        final int minCoherentEvidenceWeight = params.minCoherentEvidenceWeight;
         final int allowedOverhang = params.allowedShortFragmentOverhang;
         final int minEvidenceMapQ = params.minEvidenceMapQ;
 
@@ -1023,9 +1034,7 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
                             evidenceItrList.add(evidenceItr2);
                             final Iterator<BreakpointEvidence> evidenceItr =
                                     FlatMapGluer.concatIterators(evidenceItrList.iterator());
-                            return new BreakpointDensityFilter(evidenceItr,readMetadata,
-                                    minEvidenceWeight,minCoherentEvidenceWeight,xChecker,
-                                    minEvidenceMapQ);
+                            return getFilter(evidenceItr,readMetadata, params, xChecker);
                         }, true);
 
         filteredEvidenceRDD.cache();
@@ -1056,9 +1065,7 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
 
         // reapply the density filter (all data collected -- no more worry about partition boundaries).
         final Iterator<BreakpointEvidence> evidenceIterator =
-                new BreakpointDensityFilter(collectedEvidence.iterator(),
-                        broadcastMetadata.value(), minEvidenceWeight, minCoherentEvidenceWeight,
-                        new PartitionCrossingChecker(), minEvidenceMapQ);
+                getFilter(collectedEvidence.iterator(), broadcastMetadata.value(), params, new PartitionCrossingChecker() );
         final List<BreakpointEvidence> allEvidence = new ArrayList<>(collectedEvidence.size());
         while ( evidenceIterator.hasNext() ) {
             allEvidence.add(evidenceIterator.next());
@@ -1098,6 +1105,25 @@ public final class FindBreakpointEvidenceSpark extends GATKSparkTool {
         }
 
         return new Tuple2<>(intervals, evidenceTargetLinks);
+    }
+
+    private static Iterator<BreakpointEvidence> getFilter(
+            final Iterator<BreakpointEvidence> evidenceItr,
+            final ReadMetadata readMetadata,
+            final StructuralVariationDiscoveryArgumentCollection.FindBreakpointEvidenceSparkArgumentCollection params,
+            final PartitionCrossingChecker partitionCrossingChecker
+    ) {
+        switch(params.svEvidenceFilterType) {
+            case DENSITY:
+                return new BreakpointDensityFilter(
+                        evidenceItr, readMetadata, params.minEvidenceWeightPerCoverage,
+                        params.minCoherentEvidenceWeightPerCoverage, partitionCrossingChecker, params.minEvidenceMapQ
+                );
+            case XGBOOST:
+                return new XGBoostEvidenceFilter(evidenceItr, readMetadata, params, partitionCrossingChecker);
+            default:
+                throw new IllegalStateException("Unknown svEvidenceFilterType: " + params.svEvidenceFilterType);
+        }
     }
 
     private static void writeTargetLinks(final Broadcast<ReadMetadata> broadcastMetadata,

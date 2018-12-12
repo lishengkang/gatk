@@ -1,9 +1,9 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import org.broadinstitute.hellbender.GATKBaseTest;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
+import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.activityprofile.ActivityProfileState;
 import org.broadinstitute.hellbender.utils.downsampling.DownsamplingMethod;
@@ -12,12 +12,14 @@ import org.broadinstitute.hellbender.utils.iterators.ReadFilteringIterator;
 import org.broadinstitute.hellbender.utils.locusiterator.LocusIteratorByState;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
-import org.broadinstitute.hellbender.GATKBaseTest;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
@@ -47,9 +49,9 @@ public class HaplotypeCallerEngineUnitTest extends GATKBaseTest {
 
         try ( final ReadsDataSource reads = new ReadsDataSource(testBam.toPath());
               final ReferenceDataSource ref = new ReferenceFileSource(reference);
-              final CachingIndexedFastaSequenceFile referenceReader = new CachingIndexedFastaSequenceFile(reference);) {
+              final CachingIndexedFastaSequenceFile referenceReader = new CachingIndexedFastaSequenceFile(reference)) {
 
-            final HaplotypeCallerEngine hcEngine = new HaplotypeCallerEngine(hcArgs, false, false, reads.getHeader(), referenceReader);
+            final HaplotypeCallerEngine hcEngine = new HaplotypeCallerEngine(hcArgs, false, false, reads.getHeader(), referenceReader, new VariantAnnotatorEngine(new ArrayList<>(), hcArgs.dbsnp.dbsnp, hcArgs.comps, false));
 
             List<ReadFilter> hcFilters = HaplotypeCallerEngine.makeStandardHCReadFilters();
             hcFilters.forEach(filter -> filter.setHeader(reads.getHeader()));
@@ -65,7 +67,7 @@ public class HaplotypeCallerEngineUnitTest extends GATKBaseTest {
                 final SimpleInterval pileupInterval = new SimpleInterval(pileup.getLocation());
                 final ReferenceContext pileupRefContext = new ReferenceContext(ref, pileupInterval);
 
-                final ActivityProfileState isActiveResult = hcEngine.isActive(pileup, pileupRefContext, new FeatureContext(null, pileupInterval));
+                final ActivityProfileState isActiveResult = hcEngine.isActive(pileup, pileupRefContext, new FeatureContext((FeatureManager)null, pileupInterval));
 
                 final double expectedIsActiveValue = expectedActiveSites.contains(pileupInterval) ? 1.0 : 0.0;
                 Assert.assertEquals(isActiveResult.isActiveProb(), expectedIsActiveValue, "Wrong isActive probability for site " + pileupInterval);

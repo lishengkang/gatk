@@ -1,12 +1,10 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
 import htsjdk.samtools.SAMSequenceDictionary;
-import htsjdk.samtools.reference.ReferenceSequenceFile;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
-import java.nio.file.Path;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
-import org.broadinstitute.barclay.argparser.BetaFeature;
+import org.broadinstitute.barclay.argparser.CommandLineException;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
@@ -14,14 +12,14 @@ import org.broadinstitute.hellbender.cmdline.argumentcollections.ReferenceInputA
 import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
-import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
+import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
-
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.util.List;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
+
+import java.nio.file.Path;
+import java.util.Collection;
+import java.util.List;
 
 
 /**
@@ -187,30 +185,54 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
     }
 
     @Override
+    public List<Class<? extends Annotation>> getDefaultVariantAnnotationGroups() { return HaplotypeCallerEngine.getStandardHaplotypeCallerAnnotationGroups();}
+
+    @Override
+    public boolean useVariantAnnotations() { return true;}
+
+    /**
+     * If we are in reference confidence mode we want to filter the annotations as there are certain annotations in the standard
+     * HaplotypeCaller set which are no longer relevant, thus we filter them out before constructing the
+     * VariantAnnotationEngine because the user args will have been parsed by that point.
+     *
+     * @see GATKTool#makeVariantAnnotations()
+     * @return a collection of annotation arguments with alterations depending on hcArgs.emitReferenceConfidence
+     */
+    @Override
+    public Collection<Annotation> makeVariantAnnotations() {
+        final boolean confidenceMode = hcArgs.emitReferenceConfidence != ReferenceConfidenceMode.NONE;
+        final Collection<Annotation> annotations = super.makeVariantAnnotations();
+        return confidenceMode? HaplotypeCallerEngine.filterReferenceConfidenceAnnotations(annotations): annotations;
+    }
+
+    @Override
     public AssemblyRegionEvaluator assemblyRegionEvaluator() {
         return hcEngine;
     }
 
     @Override
     public void onTraversalStart() {
-        final ReferenceSequenceFile referenceReader = getReferenceReader(referenceArguments);
-        hcEngine = new HaplotypeCallerEngine(hcArgs, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), referenceReader);
+        if (hcArgs.emitReferenceConfidence == ReferenceConfidenceMode.GVCF && hcArgs.maxMnpDistance > 0) {
+            logger.warn("*************************************************************************");
+            logger.warn("* MNP support enabled in GVCF mode.                                     *");
+            logger.warn("* Generated GVCFs that contain MNPs can only be genotyped individually. *");
+            logger.warn("* Multi-sample calling from MNP-enabled GVCFs is unsupported.           *");
+            logger.warn("*************************************************************************");
+        }
+
+        final VariantAnnotatorEngine variantAnnotatorEngine = new VariantAnnotatorEngine(makeVariantAnnotations(),
+                hcArgs.dbsnp.dbsnp, hcArgs.comps,  hcArgs.emitReferenceConfidence != ReferenceConfidenceMode.NONE);
+        hcEngine = new HaplotypeCallerEngine(hcArgs, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), getReferenceReader(referenceArguments), variantAnnotatorEngine);
 
         // The HC engine will make the right kind (VCF or GVCF) of writer for us
         final SAMSequenceDictionary sequenceDictionary = getHeaderForReads().getSequenceDictionary();
-        vcfWriter = hcEngine.makeVCFWriter(outputVCF, sequenceDictionary, createOutputVariantIndex, createOutputVariantMD5);
+        vcfWriter = hcEngine.makeVCFWriter(outputVCF, sequenceDictionary, createOutputVariantIndex, createOutputVariantMD5, outputSitesOnlyVCFs);
         hcEngine.writeHeader(vcfWriter, sequenceDictionary, getDefaultToolVCFHeaderLines());
     }
 
     private static CachingIndexedFastaSequenceFile getReferenceReader(ReferenceInputArgumentCollection referenceArguments) {
-        final CachingIndexedFastaSequenceFile referenceReader;
         final Path reference = IOUtils.getPath(referenceArguments.getReferenceFileName());
-        try {
-            referenceReader = new CachingIndexedFastaSequenceFile(reference);
-        } catch (FileNotFoundException e) {
-            throw new UserException.CouldNotReadInputFile(reference, e);
-        }
-        return referenceReader;
+        return new CachingIndexedFastaSequenceFile(reference);
     }
 
     @Override
@@ -227,5 +249,6 @@ public final class HaplotypeCaller extends AssemblyRegionWalker {
         if ( hcEngine != null ) {
             hcEngine.shutdown();
         }
+
     }
 }

@@ -4,15 +4,15 @@ import htsjdk.samtools.seekablestream.SeekablePathStream;
 import htsjdk.tribble.Feature;
 import htsjdk.tribble.readers.LineIterator;
 import htsjdk.tribble.readers.PositionalBufferedStream;
+import htsjdk.variant.utils.VCFHeaderReader;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.*;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
-import org.broadinstitute.hellbender.engine.FeatureDataSourceUnitTest;
 import org.broadinstitute.hellbender.utils.Utils;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.VariantContextTestUtils;
-import org.seqdoop.hadoop_bam.util.VCFHeaderReader;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
@@ -224,7 +224,7 @@ public class VariantAnnotatorIntegrationTest extends CommandLineProgramTest {
         assertVariantContextsMatch(getTestFile("HCOutput.NoAnnotations.vcf"),
                 getTestFile("expected/testWithAllAnnotations.vcf"),
                 //TODO remove the -AX here when https://github.com/broadinstitute/gatk/issues/3944 is resolved
-                Arrays.asList("--use-all-annotations", "-AX", "ReferenceBases", "-L", "20:10000000-10100000", "-I", NA12878_20_21_WGS_bam),
+                Arrays.asList("--"+ StandardArgumentDefinitions.ENABLE_ALL_ANNOTATIONS, "-AX", "ReferenceBases", "-L", "20:10000000-10100000", "-I", NA12878_20_21_WGS_bam),
                  b37_reference_20_21);
     }
 

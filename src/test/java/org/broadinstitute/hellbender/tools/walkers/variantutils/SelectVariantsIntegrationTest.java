@@ -8,7 +8,7 @@ import org.testng.annotations.Test;
 
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 
 import java.io.File;
 import java.io.IOException;
@@ -344,12 +344,48 @@ public class SelectVariantsIntegrationTest extends CommandLineProgramTest {
     }
 
     @Test
-    public void testSelectFromMultiAllelic() throws IOException {
-        final String testFile = getToolTestDataDir() + "multi-allelic.bi-allelicInGIH.vcf";
-        final String samplesFile = getToolTestDataDir() + "GIH.samples.args";
+    public void testRemoveSingleSpanDelAlleleNoSpanDel() throws IOException {
+        final String testFile = getToolTestDataDir() + "spanning_deletion.vcf";
+        final String sampleName = "NA1";
 
         final IntegrationTestSpec spec = new IntegrationTestSpec(
-                baseTestString(" -sn " + samplesFile + " --exclude-non-variants --remove-unused-alternates", testFile),
+                baseTestString(" -sn " + sampleName + " --remove-unused-alternates --exclude-non-variants", testFile),
+                Collections.singletonList(getToolTestDataDir() + "expected/" + "testSelectVariants_RemoveSingleSpanDelAlleleNoSpanDel.vcf")
+        );
+        spec.executeTest("test encounter no instance of '*' as only ALT allele and ensure line is removed when only monomorphic allele exists" + testFile, this);
+    }
+
+    @Test
+    public void testRemoveSingleSpanDelAlleleExNonVar() throws IOException {
+        final String testFile = getToolTestDataDir() + "spanning_deletion.vcf";
+        final String sampleName = "NA2";
+
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(" -sn " + sampleName + " --remove-unused-alternates", testFile),
+                Collections.singletonList(getToolTestDataDir() + "expected/" + "testSelectVariants_RemoveSingleSpanDelAlleleExNoVar.vcf")
+        );
+        spec.executeTest("test will not remove variant line where '*' is only ALT allele because --exclude-non-variants not called --" + testFile, this);
+    }
+
+    @Test
+    public void testRemoveSingleSpanDelAllele() throws IOException {
+        final String testFile = getToolTestDataDir() + "spanning_deletion.vcf";
+        final String sampleName = "NA2";
+
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(" -sn " + sampleName + " --exclude-non-variants --remove-unused-alternates", testFile),
+                Collections.singletonList(getToolTestDataDir() + "expected/" + "testSelectVariants_RemoveSingleSpanDelAllele.vcf")
+        );
+        spec.executeTest("test removes variant line where '*' is only ALT allele --" + testFile, this);
+    }
+
+    @Test
+    public void testSelectFromMultiAllelic() throws IOException {
+        final String testFile = getToolTestDataDir() + "multi-allelic.bi-allelicInGIH.vcf";
+        final String sampleName = getToolTestDataDir() + "GIH.samples.args";
+
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(" -sn " + sampleName + " --exclude-non-variants --remove-unused-alternates", testFile),
                 Collections.singletonList(getToolTestDataDir() + "expected/" + "testSelectVariants_MultiAllelicExcludeNonVar.vcf")
         );
         spec.executeTest("test select from multi allelic with exclude-non-variants --" + testFile, this);
@@ -840,5 +876,28 @@ public class SelectVariantsIntegrationTest extends CommandLineProgramTest {
         );
 
         spec.executeTest("testSetFilteredGtoNocallUpdateInfo--" + testFile, this);
+    }
+
+    @DataProvider(name = "dropAnnotationsDataProvider")
+    Object[][] dropAnnotationsDataProvider() {
+        return new Object[][]{
+                {"-DA FisherStrand -DA OnOffGenotype -DGA RD -sn NA11894", "testSelectVariants_DropAnnotations.vcf", "standard"},
+                {"-DA FisherStrand -DA OnOffGenotype -DGA RD -sn NA11894 -DA NotAnAnnotation -DGA AlsoNotAnAnnotation", "testSelectVariants_DropAnnotations.vcf", "unused_annotations"},
+                {"-DA FisherStrand -DA OnOffGenotype -DGA RD -sn NA11894 -select 'FisherStrand > 10.0'", "testSelectVariants_DropAnnotationsSelectFisherStrand.vcf", "select_on_dropped_annotation"},
+                {"-DA FisherStrand -DA OnOffGenotype -DGA RD -sn NA11894 -select 'RMSMAPQ > 175.0'", "testSelectVariants_DropAnnotationsSelectRMSMAPQ.vcf", "select_on_kept_annotation"},
+                {"-DA FisherStrand -DA OnOffGenotype -DGA RD -sn NA11894 -select 'vc.getGenotype(\"NA11894\").getExtendedAttribute(\"RD\")>6'", "testSelectVariants_DropAnnotationsSelectRD.vcf", "select_on_dropped_genotype_annotation"},
+                {"-DA FisherStrand -DA OnOffGenotype -DGA RD -sn NA11894 -select 'vc.getGenotype(\"NA11894\").getGQ()==1'", "testSelectVariants_DropAnnotationsSelectGQ.vcf", "select_on_kept_genotype_annotation"}
+        };
+    }
+
+    @Test(dataProvider = "dropAnnotationsDataProvider")
+    public void testDropAnnotations(String args, String expectedFile, String testName) throws IOException {
+        final String testFile = getToolTestDataDir() + "vcfexample2.vcf";
+
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                baseTestString(args, testFile),
+                Collections.singletonList(getToolTestDataDir() + "expected/" + expectedFile)
+        );
+        spec.executeTest("testDropAnnotations--" + testName, this);
     }
 }

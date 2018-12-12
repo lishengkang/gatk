@@ -1,10 +1,12 @@
 package org.broadinstitute.hellbender.utils;
 
 import org.apache.commons.math3.distribution.EnumeratedDistribution;
+import org.apache.commons.math3.exception.DimensionMismatchException;
 import org.apache.commons.math3.exception.NotStrictlyPositiveException;
 import org.apache.commons.math3.exception.NumberIsTooLargeException;
 import org.apache.commons.math3.linear.RealMatrix;
 import org.apache.commons.math3.random.RandomGenerator;
+import org.apache.commons.math3.special.Beta;
 import org.apache.commons.math3.special.Gamma;
 import org.apache.commons.math3.stat.descriptive.moment.Variance;
 import org.apache.commons.math3.stat.descriptive.rank.Median;
@@ -17,10 +19,7 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.param.ParamUtils;
 
 import javax.annotation.Nonnull;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 import java.util.function.*;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
@@ -356,6 +355,27 @@ public final class MathUtils {
 
     public static double[] posteriors(double[] log10Priors, double[] log10Likelihoods) {
         return normalizeFromLog10ToLinearSpace(MathArrays.ebeAdd(log10Priors, log10Likelihoods));
+    }
+
+    public static int[] normalizePLs(int[] PLs) {
+        final int[] newPLs = new int[PLs.length];
+        final int smallest = arrayMin(PLs);
+        for(int i=0; i<PLs.length; i++) {
+            newPLs[i] = PLs[i]-smallest;
+        }
+        return newPLs;
+    }
+
+    public static int[] ebeAdd(final int[] a, final int[] b) throws DimensionMismatchException {
+            if (a.length != b.length) {
+                throw new DimensionMismatchException(a.length, b.length);
+            }
+
+            final int[] result = a.clone();
+            for (int i = 0; i < a.length; i++) {
+                result[i] += b[i];
+            }
+            return result;
     }
 
     // sum of int -> double[] function mapped to an index range
@@ -907,6 +927,22 @@ public final class MathUtils {
         return result;
     }
 
+    public static <E> double sumDoubleFunction(final Collection<E> collection, final ToDoubleFunction<E> function) {
+        double result = 0;
+        for (final E e: collection) {
+            result += function.applyAsDouble(e);
+        }
+        return result;
+    }
+
+    public static <E> int sumIntFunction(final Collection<E> collection, final ToIntFunction<E> function) {
+        int result = 0;
+        for (final E e: collection) {
+            result += function.applyAsInt(e);
+        }
+        return result;
+    }
+
     /**
      * Compares double values for equality (within 1e-6), or inequality.
      *
@@ -993,6 +1029,9 @@ public final class MathUtils {
      */
     public static double log10BinomialProbability(final int n, final int k, final double log10p) {
         Utils.validateArg(log10p < 1.0e-18, "log10p: Log10-probability must be 0 or less");
+        if (log10p == Double.NEGATIVE_INFINITY){
+            return k == 0 ? 0 : Double.NEGATIVE_INFINITY;
+        }
         double log10OneMinusP = Math.log10(1 - Math.pow(10.0, log10p));
         return log10BinomialCoefficient(n, k) + log10p * k + log10OneMinusP * (n - k);
     }
@@ -1185,6 +1224,17 @@ public final class MathUtils {
     public static double arrayMax(final double[] array) {
         Utils.nonNull(array);
         return array[maxElementIndex(array)];
+    }
+
+    public static int arrayMin(final int[] array) {
+        Utils.nonNull(array);
+        int min=array[0];
+        for(int i=0; i<array.length; i++) {
+            if(array[i] < min) {
+                min = array[i];
+            }
+        }
+        return min;
     }
 
     /**
@@ -1388,6 +1438,25 @@ public final class MathUtils {
      * to the overhead of creating a stream, especially with small arrays.  Thus we wrap the wordy but fast array code
      * in the following method which permits concise Java 8 code.
      *
+     * Returns a new array -- the original array in not modified.
+     *
+     * This method has been benchmarked and performs as well as array-only code.
+     */
+    public static double[] applyToArray(final int[] array, final IntToDoubleFunction func) {
+        Utils.nonNull(func);
+        Utils.nonNull(array);
+        final double[] result = new double[array.length];
+        for (int m = 0; m < result.length; m++) {
+            result[m] = func.applyAsDouble(array[m]);
+        }
+        return result;
+    }
+
+    /**
+     * The following method implements Arrays.stream(array).map(func).toArray(), which is concise but performs poorly due
+     * to the overhead of creating a stream, especially with small arrays.  Thus we wrap the wordy but fast array code
+     * in the following method which permits concise Java 8 code.
+     *
      * The original array is modified in place.
      *
      * This method has been benchmarked and performs as well as array-only code.
@@ -1427,5 +1496,42 @@ public final class MathUtils {
             }
         }
         return true;
+    }
+
+    /**
+     *
+     * @param array array of integers
+     * @return index of the max. In case of a tie, return the smallest index
+     */
+    public static int maxElementIndex(final int[] array){
+        int maxIndex = 0;
+        int currentMax = Integer.MIN_VALUE;
+        for (int i = 0; i < array.length; i++){
+            if (array[i] > currentMax){
+                maxIndex = i;
+                currentMax = array[i];
+            }
+        }
+        return maxIndex;
+    }
+
+    /**
+     *
+     * Computes the log10 probability density of BetaBinomial(k|n, alpha, beta)
+     *
+     * @param alpha pseudocount of number of heads
+     * @param beta pseudocount of number of tails
+     * @param k value to evaluate
+     * @param n number of coin flips
+     * @return probability density function evaluated at k
+     */
+    public static double log10BetaBinomialProbability(final int k, final int n, final double alpha, final double beta){
+        Utils.validateArg(k <= n, String.format("k must be less than or equal to n but got k = %d, n = %d", k, n));
+        return log10BinomialCoefficient(n, k) + Beta.logBeta(k + alpha, n - k + beta) * LOG10_OF_E -
+                Beta.logBeta(alpha, beta) * LOG10_OF_E;
+    }
+
+    public static boolean isAProbability(final double p){
+        return p >= 0 && p <= 1;
     }
 }

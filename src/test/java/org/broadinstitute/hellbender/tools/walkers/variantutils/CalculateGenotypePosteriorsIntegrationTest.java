@@ -4,8 +4,8 @@ import htsjdk.samtools.util.BlockCompressedInputStream;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -25,6 +25,35 @@ public final class CalculateGenotypePosteriorsIntegrationTest extends CommandLin
     private String CEUtrioPopPriorsTest = dir + "CEUtrioPopPriorsTest_chr1.vcf";
     private String CEUtrioMixedPloidyTest = dir + "CEUtrioMixedPloidy.vcf";
     private String getThreeMemberNonTrioTest = dir + "threeMemberNonTrioTest_chr1.vcf";
+
+    @Test
+    public void testDefaultsWithPanel() throws IOException {
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                " -O %s" +
+                        " -R " + b37_reference_20_21 +    //NOTE: we need a reference for -L
+                        " -L 20:10,000,000-10,010,000" +
+                        " -" +CalculateGenotypePosteriors.SUPPORTING_CALLSETS_SHORT_NAME + " " + largeDir + "1000G.phase3.broad.withGenotypes.chr20.10100000.vcf" +
+                        " --" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE +" false" +
+                        " -V " + dir + "NA12878.Jan2013.haplotypeCaller.subset.indels.vcf",
+                Collections.singletonList(dir + "expectedCGP_testDefaultsWithPanel.vcf")
+        );
+        spec.executeTest("testDefaultsWithPanel", this);
+    }
+
+    @Test
+    public void testNumRefWithPanel() throws IOException {
+        final IntegrationTestSpec spec = new IntegrationTestSpec(
+                " -O %s" +
+                        " -R " + b37_reference_20_21 +    //NOTE: we need a reference for -L
+                        " -L 20:10,000,000-10,010,000" +
+                        " -" +CalculateGenotypePosteriors.SUPPORTING_CALLSETS_SHORT_NAME + " " + largeDir + "1000G.phase3.broad.withGenotypes.chr20.10100000.vcf" +
+                        " --" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE +" false" +
+                        " -V " + dir + "NA12878.Jan2013.haplotypeCaller.subset.indels.vcf" +
+                        " --" + CalculateGenotypePosteriors.NUM_REF_SAMPLES_LONG_NAME + " 2500",
+                Collections.singletonList(dir + "expectedCGP_testNumRefWithPanel.vcf")
+        );
+        spec.executeTest("testDefaultsWithPanel", this);
+    }
 
     @Test
     //use the first 20 variants to save time; they have a nice range of AC from 4 to over 4000

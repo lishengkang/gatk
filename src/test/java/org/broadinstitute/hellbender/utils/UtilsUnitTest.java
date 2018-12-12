@@ -2,14 +2,15 @@ package org.broadinstitute.hellbender.utils;
 
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Sets;
 import com.google.common.primitives.Ints;
 import htsjdk.samtools.util.Log.LogLevel;
 import org.apache.commons.io.FileUtils;
 import org.apache.logging.log4j.Level;
-import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -18,6 +19,7 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import static java.util.Arrays.asList;
 import static org.testng.Assert.assertEquals;
@@ -879,5 +881,101 @@ public final class UtilsUnitTest extends GATKBaseTest {
     @Test(dataProvider = "provideDataForTestUtilsSplitStringExhaustively")
     public void testUtilsSplitStringExhaustively( final String str, final String delimiter ) {
         exhaustiveStringSplitHelper(str, delimiter);
+    }
+
+    @DataProvider
+    public Object[][] provideGetReverseValueToListMap() {
+        return new Object[][]{
+                {ImmutableMap.of("Foo", Arrays.asList(1, 2, 3)),
+                        ImmutableMap.of(1, Sets.newHashSet("Foo"), 2, Sets.newHashSet("Foo"), 3, Sets.newHashSet("Foo"))},
+                {ImmutableMap.of("Foo", Arrays.asList(1, 2, 3), "Baz", Arrays.asList(1, 2)),
+                        ImmutableMap.of(1, Sets.newHashSet("Foo", "Baz"), 2, Sets.newHashSet("Foo", "Baz"), 3, Sets.newHashSet("Foo"))},
+
+                // Let's throw in some nulls
+                {Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>(null, Arrays.asList("one", "two", "three")),
+                    new AbstractMap.SimpleEntry<>("two", Arrays.asList("one", "two")))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue))),
+                 Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>("one", Sets.newHashSet(null, "two")),
+                    new AbstractMap.SimpleEntry<>("two", Sets.newHashSet(null, "two")),
+                    new AbstractMap.SimpleEntry<>("three", Sets.newHashSet((Object) null)))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)))},
+
+                // Let's throw in some nulls again
+                {Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>(null, Arrays.asList(null, "two", "three")),
+                    new AbstractMap.SimpleEntry<>("two", Arrays.asList("one", "two")))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue))),
+                 Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>("one", Sets.newHashSet( "two")),
+                    new AbstractMap.SimpleEntry<>("two", Sets.newHashSet(null, "two")),
+                    new AbstractMap.SimpleEntry<>("three", Sets.newHashSet((Object) null)),
+                    new AbstractMap.SimpleEntry<>(null, Sets.newHashSet((Object) null)))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)))},
+
+                    // Let's throw in some nulls again and a non-string
+                {Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>(null, Arrays.asList(null, 2, "three")),
+                    new AbstractMap.SimpleEntry<>("two", Arrays.asList("one", "two")))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue))),
+                 Collections.unmodifiableMap(Stream.of(
+                    new AbstractMap.SimpleEntry<>("one", Sets.newHashSet( "two")),
+                    new AbstractMap.SimpleEntry<>("two", Sets.newHashSet( "two")),
+                    new AbstractMap.SimpleEntry<>("three", Sets.newHashSet((Object) null)),
+                    new AbstractMap.SimpleEntry<>(null, Sets.newHashSet((Object) null)),
+                    new AbstractMap.SimpleEntry<>(2, Sets.newHashSet((Object) null)))
+                    .collect(Collectors.toMap(AbstractMap.SimpleEntry::getKey, AbstractMap.SimpleEntry::getValue)))}
+        };
+    }
+
+    @Test(dataProvider = "provideGetReverseValueToListMap")
+    public <T,U> void testGetReverseValueToListMap(final Map<T, List<U>> input,  final Map<U, Set<T>> gtOutput) {
+        Assert.assertEquals(Utils.getReverseValueToListMap(input), gtOutput);
+    }
+
+    @DataProvider
+    public Iterator<Object[]> provideDataForTestUtilsFormatting() {
+        final List<Object[]> testCases = new ArrayList<>();
+        testCases.addAll(Arrays.asList(
+                new Object[]{1, 2, "50.00", "0.50"},
+                new Object[]{0, 3, "0.00", "0.00"},
+                new Object[]{1, 3, "33.33", "0.33"},
+                new Object[]{50, 3000, "1.67", "0.02"},
+                new Object[]{50, 0, "NA", "NA"},
+                new Object[]{0, 0, "NA", "NA"}
+        ));
+
+        return testCases.iterator();
+    }
+
+    @Test(dataProvider = "provideDataForTestUtilsFormatting")
+    public void testFormattedPctAndRatio(final long input1, final long input2, final String formattedPct, final String formattedRatio) {
+        Assert.assertEquals(Utils.formattedPercent(input1, input2), formattedPct);
+        Assert.assertEquals(Utils.formattedRatio(input1, input2), formattedRatio);
+    }
+
+    @DataProvider(name="provideDataForTestFilterCollectionByExpressions")
+    public Object[][] provideDataForTestFilterCollectionByExpressions() {
+        return new Object[][] {
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a"), true, new LinkedHashSet<>(Arrays.asList("a")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("b"), true, Collections.EMPTY_SET },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("b"), false, new LinkedHashSet<>(Arrays.asList("ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "b"), true, new LinkedHashSet<>(Arrays.asList("a")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "b"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "ab"), true, new LinkedHashSet<>(Arrays.asList("a", "ab")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList("a", "ab"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")) },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*b.*"), true, Collections.EMPTY_SET },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*b.*"), false, new LinkedHashSet<>(Arrays.asList("ab", "abc") )},
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*"), true, Collections.EMPTY_SET },
+                new Object[] { new LinkedHashSet<>(Arrays.asList("a", "ab", "abc")), Arrays.asList(".*"), false, new LinkedHashSet<>(Arrays.asList("a", "ab", "abc") )}
+        };
+    }
+
+    @Test(dataProvider = "provideDataForTestFilterCollectionByExpressions")
+    public void testTestFilterCollectionByExpressions(Set<String> values, Collection<String> filters, boolean exactMatch, Set<String> expected) {
+        Set<String> actual = Utils.filterCollectionByExpressions(values, filters, exactMatch);
+        Assert.assertEquals(actual, expected);
     }
 }

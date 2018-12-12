@@ -1,9 +1,11 @@
 package org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode;
 
+import com.google.common.annotations.VisibleForTesting;
 import htsjdk.variant.variantcontext.Allele;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.tools.funcotator.Funcotation;
+import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetadata;
 import org.broadinstitute.hellbender.tools.funcotator.vcfOutput.VcfOutputRenderer;
 import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature;
 import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfGeneFeature;
@@ -14,8 +16,10 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * A class to represent a Functional Annotation.
+ * A class to represent a Functional Annotation.  Each instance represents the annotations on a single transcript.
  * Created by jonn on 8/22/17.
+ *
+ * TODO: This will likely need to be renamed TranscriptFuncotation (or will have to implement an interface for TranscriptFuncotation) in order to handle non-gencode transcript sources.
  */
 public class GencodeFuncotation implements Funcotation {
 
@@ -43,15 +47,24 @@ public class GencodeFuncotation implements Funcotation {
     private String                  annotationTranscript;               // TRIVIAL
     private String                  transcriptStrand;                   // TRIVIAL
     private Integer                 transcriptExon;                     //           CDS / UTRs
-    private Integer                 transcriptPos;                      // TRIVIAL
+    private Integer                 transcriptStartPos;                 // TRIVIAL
+    private Integer                 transcriptEndPos;                   // TRIVIAL
     private String                  cDnaChange;                         //           CDS
     private String                  codonChange;                        //           CDS
     private String                  proteinChange;                      //           CDS
     private Double                  gcContent;
 
+    /**
+     * The reference context string is a string of N (configurable) bases around the
+     * locus of the variant on the reference genome.
+     * The reference context string is always represented by bases from the + strand around the variant, regardless of
+     * the strandedness of the variant itself.
+     */
     private String                  referenceContext;                   // Already calculated.
 
     private List<String>            otherTranscripts;                   // TRIVIAL
+
+    private String                  dataSourceName;
 
     //------------------------------------------------------------
     // Non-serialized fields:
@@ -89,17 +102,22 @@ public class GencodeFuncotation implements Funcotation {
     private String referenceContextSerializedOverride     = null;
     private String otherTranscriptsSerializedOverride     = null;
 
+    private FuncotationMetadata metadata;
     //==================================================================================================================
 
     /**
      * Basic constructor for a {@link GencodeFuncotation}.
+     *
+     * Not public, since calling code should use the GencodeFuncotationBuilder.
      */
-    public GencodeFuncotation() {}
+    @VisibleForTesting
+    GencodeFuncotation() {}
 
     /**
      * Copy constructor for a {@link GencodeFuncotation}.
      */
-    public GencodeFuncotation(final GencodeFuncotation that) {
+    @VisibleForTesting
+    GencodeFuncotation(final GencodeFuncotation that) {
         this.hugoSymbol = that.hugoSymbol;                         
         this.ncbiBuild = that.ncbiBuild;
         this.chromosome = that.chromosome;
@@ -114,13 +132,15 @@ public class GencodeFuncotation implements Funcotation {
         this.annotationTranscript = that.annotationTranscript;
         this.transcriptStrand = that.transcriptStrand;
         this.transcriptExon = that.transcriptExon;
-        this.transcriptPos = that.transcriptPos;
+        this.transcriptStartPos = that.transcriptStartPos;
+        this.transcriptEndPos = that.transcriptEndPos;
         this.cDnaChange = that.cDnaChange;
         this.codonChange = that.codonChange;
         this.proteinChange = that.proteinChange;
         this.gcContent = that.gcContent;
         this.referenceContext = that.referenceContext;
         this.otherTranscripts = that.otherTranscripts;
+        this.dataSourceName = that.dataSourceName;
         this.locusLevel = that.locusLevel;
         this.apprisRank = that.apprisRank;
         this.transcriptLength = that.transcriptLength;
@@ -148,6 +168,7 @@ public class GencodeFuncotation implements Funcotation {
         this.gcContentSerializedOverride = that.gcContentSerializedOverride;
         this.referenceContextSerializedOverride = that.referenceContextSerializedOverride;
         this.otherTranscriptsSerializedOverride = that.otherTranscriptsSerializedOverride;
+        this.metadata = that.metadata;
     }
 
     //==================================================================================================================
@@ -167,41 +188,10 @@ public class GencodeFuncotation implements Funcotation {
     }
 
     @Override
-    public String serializeToVcfString() {
-        // Alias for the FIELD_DELIMITER so we can have nicer looking code:
-        final String DELIMITER = VcfOutputRenderer.FIELD_DELIMITER;
-
-        // After the manual string, we check to see if we have an override first and if not we get the set field value:
-        return  (hugoSymbolSerializedOverride != null ? hugoSymbolSerializedOverride : (hugoSymbol != null ? hugoSymbol : "")) + DELIMITER +
-                (ncbiBuildSerializedOverride != null ? ncbiBuildSerializedOverride : (ncbiBuild != null ? ncbiBuild : "")) + DELIMITER +
-                (chromosomeSerializedOverride != null ? chromosomeSerializedOverride : (chromosome != null ? chromosome : "")) + DELIMITER +
-                (startSerializedOverride != null ? startSerializedOverride : start) + DELIMITER +
-                (endSerializedOverride != null ? endSerializedOverride : end) + DELIMITER +
-                (variantClassificationSerializedOverride != null ? variantClassificationSerializedOverride : (variantClassification != null ? variantClassification : "")) + DELIMITER +
-                (secondaryVariantClassificationSerializedOverride != null ? secondaryVariantClassificationSerializedOverride : (secondaryVariantClassification != null ? secondaryVariantClassification : "")) + DELIMITER +
-                (variantTypeSerializedOverride != null ? variantTypeSerializedOverride : (variantType != null ? variantType : "")) + DELIMITER +
-                (refAlleleSerializedOverride != null ? refAlleleSerializedOverride : (refAllele != null ? refAllele : "")) + DELIMITER +
-                // NOTE: Ref allele gets serialized as the tumorSeqAllele1 as well, but we have to account for the override:
-                (tumorSeqAllele1SerializedOverride != null ? tumorSeqAllele1SerializedOverride : (refAllele != null ? refAllele : "")) + DELIMITER +
-                (tumorSeqAllele2SerializedOverride != null ? tumorSeqAllele2SerializedOverride : (tumorSeqAllele2 != null ? tumorSeqAllele2 : "")) + DELIMITER +
-                (genomeChangeSerializedOverride != null ? genomeChangeSerializedOverride : (genomeChange != null ? genomeChange : "")) + DELIMITER +
-                (annotationTranscriptSerializedOverride != null ? annotationTranscriptSerializedOverride : (annotationTranscript != null ? annotationTranscript : "")) + DELIMITER +
-                (transcriptStrandSerializedOverride != null ? transcriptStrandSerializedOverride : (transcriptStrand != null ? transcriptStrand : "")) + DELIMITER +
-                (transcriptExonSerializedOverride != null ? transcriptExonSerializedOverride : (transcriptExon != null ? transcriptExon : "")) + DELIMITER +
-                (transcriptPosSerializedOverride != null ? transcriptPosSerializedOverride : (transcriptPos != null ? transcriptPos : "")) + DELIMITER +
-                (cDnaChangeSerializedOverride != null ? cDnaChangeSerializedOverride : (cDnaChange != null ? cDnaChange : "")) + DELIMITER +
-                (codonChangeSerializedOverride != null ? codonChangeSerializedOverride : (codonChange != null ? codonChange : "")) + DELIMITER +
-                (proteinChangeSerializedOverride != null ? proteinChangeSerializedOverride : (proteinChange != null ? proteinChange : "")) + DELIMITER +
-                (gcContentSerializedOverride != null ? gcContentSerializedOverride : (gcContent != null ? gcContent : "")) + DELIMITER +
-                (referenceContextSerializedOverride != null ? referenceContextSerializedOverride : (referenceContext != null ? referenceContext : "")) + DELIMITER +
-                (otherTranscriptsSerializedOverride != null ? otherTranscriptsSerializedOverride : (otherTranscripts != null ? otherTranscripts.stream().map(Object::toString).collect(Collectors.joining(VcfOutputRenderer.OTHER_TRANSCRIPT_DELIMITER)) : ""));
-    }
-
-    @Override
     public void setFieldSerializationOverrideValue( final String fieldName, final String overrideValue ) {
 
         // Cut off the "Gencode" and version number at the start of the string:
-        final String shortFieldName = fieldName.replaceAll("^" + GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_", "");
+        final String shortFieldName = fieldName.replaceAll("^" + getDataSourceName()+ "_" + version + "_", "");
 
         switch (shortFieldName) {
             case "hugoSymbol":                     hugoSymbolSerializedOverride = overrideValue;                     break;
@@ -232,35 +222,35 @@ public class GencodeFuncotation implements Funcotation {
 
     @Override
     public String getDataSourceName() {
-        return GencodeFuncotationFactory.DATA_SOURCE_NAME;
+        return dataSourceName;
     }
 
     @Override
     public LinkedHashSet<String> getFieldNames() {
         return new LinkedHashSet<>(
                 Arrays.asList(
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_hugoSymbol",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_ncbiBuild",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_chromosome",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_start",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_end",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_variantClassification",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_secondaryVariantClassification",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_variantType",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_refAllele",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_tumorSeqAllele1",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_tumorSeqAllele2",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_genomeChange",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_annotationTranscript",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_transcriptStrand",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_transcriptExon",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_transcriptPos",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_cDnaChange",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_codonChange",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_proteinChange",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_gcContent",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_referenceContext",
-                        GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_otherTranscripts"
+                        getDataSourceName() + "_" + version + "_hugoSymbol",
+                        getDataSourceName() + "_" + version + "_ncbiBuild",
+                        getDataSourceName() + "_" + version + "_chromosome",
+                        getDataSourceName() + "_" + version + "_start",
+                        getDataSourceName() + "_" + version + "_end",
+                        getDataSourceName() + "_" + version + "_variantClassification",
+                        getDataSourceName() + "_" + version + "_secondaryVariantClassification",
+                        getDataSourceName() + "_" + version + "_variantType",
+                        getDataSourceName() + "_" + version + "_refAllele",
+                        getDataSourceName() + "_" + version + "_tumorSeqAllele1",
+                        getDataSourceName() + "_" + version + "_tumorSeqAllele2",
+                        getDataSourceName() + "_" + version + "_genomeChange",
+                        getDataSourceName() + "_" + version + "_annotationTranscript",
+                        getDataSourceName() + "_" + version + "_transcriptStrand",
+                        getDataSourceName() + "_" + version + "_transcriptExon",
+                        getDataSourceName() + "_" + version + "_transcriptPos",
+                        getDataSourceName() + "_" + version + "_cDnaChange",
+                        getDataSourceName() + "_" + version + "_codonChange",
+                        getDataSourceName() + "_" + version + "_proteinChange",
+                        getDataSourceName() + "_" + version + "_gcContent",
+                        getDataSourceName() + "_" + version + "_referenceContext",
+                        getDataSourceName() + "_" + version + "_otherTranscripts"
                 )
         );
     }
@@ -270,13 +260,13 @@ public class GencodeFuncotation implements Funcotation {
 
         // Allow a user to specify the name of the field, or the fully-qualified name of the field
         // with GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_" at the start.
-        final String altFieldName = GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_" + fieldName;
+        final String altFieldName = getDataSourceName() + "_" + version + "_" + fieldName;
         final LinkedHashSet<String> fieldNames = getFieldNames();
 
         if ( fieldNames.contains(fieldName) || fieldNames.contains(altFieldName) ) {
-            switch(fieldName.replace(GencodeFuncotationFactory.DATA_SOURCE_NAME + "_" + version + "_", "")) {
+            switch(fieldName.replace(getDataSourceName() + "_" + version + "_", "")) {
                 case "hugoSymbol":
-                    return (hugoSymbolSerializedOverride != null ? hugoSymbolSerializedOverride : (hugoSymbol != null ? hugoSymbol : ""));
+                    return (hugoSymbolSerializedOverride != null ? hugoSymbolSerializedOverride : ((hugoSymbol == null) || hugoSymbol.isEmpty()) ? "Unknown" : hugoSymbol);
                 case "ncbiBuild":
                     return (ncbiBuildSerializedOverride != null ? ncbiBuildSerializedOverride : (ncbiBuild != null ? ncbiBuild : ""));
                 case "chromosome":
@@ -306,7 +296,7 @@ public class GencodeFuncotation implements Funcotation {
                 case "transcriptExon":
                     return (transcriptExonSerializedOverride != null ? transcriptExonSerializedOverride : (transcriptExon != null ? String.valueOf(transcriptExon) : ""));
                 case "transcriptPos":
-                    return (transcriptPosSerializedOverride != null ? transcriptPosSerializedOverride : (transcriptPos != null ? String.valueOf(transcriptPos) : ""));
+                    return (transcriptPosSerializedOverride != null ? transcriptPosSerializedOverride : getTranscriptPosString());
                 case "cDnaChange":
                     return (cDnaChangeSerializedOverride != null ? cDnaChangeSerializedOverride : (cDnaChange != null ? cDnaChange : ""));
                 case "codonChange":
@@ -325,93 +315,112 @@ public class GencodeFuncotation implements Funcotation {
         throw new GATKException(this.getClass().getSimpleName() + ": Does not contain field: " + fieldName);
     }
 
+    @Override
+    public boolean hasField(final String fieldName) {
+        final LinkedHashSet<String> fieldNames = getFieldNames();
+        final String altFieldName = getDataSourceName() + "_" + version + "_" + fieldName;
+        return ( fieldNames.contains(fieldName) || fieldNames.contains(altFieldName) );
+    }
+
+    @Override
+    public FuncotationMetadata getMetadata() {
+        return this.metadata;
+    }
+
     //==================================================================================================================
+
 
     @Override
     public boolean equals(final Object o) {
-        if ( this == o ) return true;
-        if ( o == null || getClass() != o.getClass() ) return false;
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
 
-        final GencodeFuncotation that = (GencodeFuncotation) o;
+        GencodeFuncotation that = (GencodeFuncotation) o;
 
-        if ( start != that.start ) return false;
-        if ( end != that.end ) return false;
-        if ( hugoSymbol != null ? !hugoSymbol.equals(that.hugoSymbol) : that.hugoSymbol != null ) return false;
-        if ( ncbiBuild != null ? !ncbiBuild.equals(that.ncbiBuild) : that.ncbiBuild != null ) return false;
-        if ( chromosome != null ? !chromosome.equals(that.chromosome) : that.chromosome != null ) return false;
-        if ( variantClassification != that.variantClassification ) return false;
-        if ( secondaryVariantClassification != that.secondaryVariantClassification ) return false;
-        if ( variantType != that.variantType ) return false;
-        if ( refAllele != null ? !refAllele.equals(that.refAllele) : that.refAllele != null ) return false;
-        if ( tumorSeqAllele2 != null ? !tumorSeqAllele2.equals(that.tumorSeqAllele2) : that.tumorSeqAllele2 != null )
+        if (start != that.start) return false;
+        if (end != that.end) return false;
+        if (hugoSymbol != null ? !hugoSymbol.equals(that.hugoSymbol) : that.hugoSymbol != null) return false;
+        if (ncbiBuild != null ? !ncbiBuild.equals(that.ncbiBuild) : that.ncbiBuild != null) return false;
+        if (chromosome != null ? !chromosome.equals(that.chromosome) : that.chromosome != null) return false;
+        if (variantClassification != that.variantClassification) return false;
+        if (secondaryVariantClassification != that.secondaryVariantClassification) return false;
+        if (variantType != that.variantType) return false;
+        if (refAllele != null ? !refAllele.equals(that.refAllele) : that.refAllele != null) return false;
+        if (tumorSeqAllele2 != null ? !tumorSeqAllele2.equals(that.tumorSeqAllele2) : that.tumorSeqAllele2 != null)
             return false;
-        if ( genomeChange != null ? !genomeChange.equals(that.genomeChange) : that.genomeChange != null ) return false;
-        if ( annotationTranscript != null ? !annotationTranscript.equals(that.annotationTranscript) : that.annotationTranscript != null )
+        if (genomeChange != null ? !genomeChange.equals(that.genomeChange) : that.genomeChange != null) return false;
+        if (annotationTranscript != null ? !annotationTranscript.equals(that.annotationTranscript) : that.annotationTranscript != null)
             return false;
-        if ( transcriptStrand != null ? !transcriptStrand.equals(that.transcriptStrand) : that.transcriptStrand != null )
+        if (transcriptStrand != null ? !transcriptStrand.equals(that.transcriptStrand) : that.transcriptStrand != null)
             return false;
-        if ( transcriptExon != null ? !transcriptExon.equals(that.transcriptExon) : that.transcriptExon != null )
+        if (transcriptExon != null ? !transcriptExon.equals(that.transcriptExon) : that.transcriptExon != null)
             return false;
-        if ( transcriptPos != null ? !transcriptPos.equals(that.transcriptPos) : that.transcriptPos != null )
+        if (transcriptStartPos != null ? !transcriptStartPos.equals(that.transcriptStartPos) : that.transcriptStartPos != null)
             return false;
-        if ( cDnaChange != null ? !cDnaChange.equals(that.cDnaChange) : that.cDnaChange != null ) return false;
-        if ( codonChange != null ? !codonChange.equals(that.codonChange) : that.codonChange != null ) return false;
-        if ( proteinChange != null ? !proteinChange.equals(that.proteinChange) : that.proteinChange != null )
+        if (transcriptEndPos != null ? !transcriptEndPos.equals(that.transcriptEndPos) : that.transcriptEndPos != null)
             return false;
-        if ( gcContent != null ? !gcContent.equals(that.gcContent) : that.gcContent != null ) return false;
-        if ( referenceContext != null ? !referenceContext.equals(that.referenceContext) : that.referenceContext != null )
+        if (cDnaChange != null ? !cDnaChange.equals(that.cDnaChange) : that.cDnaChange != null) return false;
+        if (codonChange != null ? !codonChange.equals(that.codonChange) : that.codonChange != null) return false;
+        if (proteinChange != null ? !proteinChange.equals(that.proteinChange) : that.proteinChange != null)
             return false;
-        if ( otherTranscripts != null ? !otherTranscripts.equals(that.otherTranscripts) : that.otherTranscripts != null )
+        if (gcContent != null ? !gcContent.equals(that.gcContent) : that.gcContent != null) return false;
+        if (referenceContext != null ? !referenceContext.equals(that.referenceContext) : that.referenceContext != null)
             return false;
-        if ( locusLevel != null ? !locusLevel.equals(that.locusLevel) : that.locusLevel != null ) return false;
-        if ( apprisRank != that.apprisRank ) return false;
-        if ( transcriptLength != null ? !transcriptLength.equals(that.transcriptLength) : that.transcriptLength != null )
+        if (otherTranscripts != null ? !otherTranscripts.equals(that.otherTranscripts) : that.otherTranscripts != null)
             return false;
-        if ( version != null ? !version.equals(that.version) : that.version != null ) return false;
-        if ( geneTranscriptType != that.geneTranscriptType ) return false;
-        if ( hugoSymbolSerializedOverride != null ? !hugoSymbolSerializedOverride.equals(that.hugoSymbolSerializedOverride) : that.hugoSymbolSerializedOverride != null )
+        if (dataSourceName != null ? !dataSourceName.equals(that.dataSourceName) : that.dataSourceName != null)
             return false;
-        if ( ncbiBuildSerializedOverride != null ? !ncbiBuildSerializedOverride.equals(that.ncbiBuildSerializedOverride) : that.ncbiBuildSerializedOverride != null )
+        if (locusLevel != null ? !locusLevel.equals(that.locusLevel) : that.locusLevel != null) return false;
+        if (apprisRank != that.apprisRank) return false;
+        if (transcriptLength != null ? !transcriptLength.equals(that.transcriptLength) : that.transcriptLength != null)
             return false;
-        if ( chromosomeSerializedOverride != null ? !chromosomeSerializedOverride.equals(that.chromosomeSerializedOverride) : that.chromosomeSerializedOverride != null )
+        if (version != null ? !version.equals(that.version) : that.version != null) return false;
+        if (geneTranscriptType != that.geneTranscriptType) return false;
+        if (hugoSymbolSerializedOverride != null ? !hugoSymbolSerializedOverride.equals(that.hugoSymbolSerializedOverride) : that.hugoSymbolSerializedOverride != null)
             return false;
-        if ( startSerializedOverride != null ? !startSerializedOverride.equals(that.startSerializedOverride) : that.startSerializedOverride != null )
+        if (ncbiBuildSerializedOverride != null ? !ncbiBuildSerializedOverride.equals(that.ncbiBuildSerializedOverride) : that.ncbiBuildSerializedOverride != null)
             return false;
-        if ( endSerializedOverride != null ? !endSerializedOverride.equals(that.endSerializedOverride) : that.endSerializedOverride != null )
+        if (chromosomeSerializedOverride != null ? !chromosomeSerializedOverride.equals(that.chromosomeSerializedOverride) : that.chromosomeSerializedOverride != null)
             return false;
-        if ( variantClassificationSerializedOverride != null ? !variantClassificationSerializedOverride.equals(that.variantClassificationSerializedOverride) : that.variantClassificationSerializedOverride != null )
+        if (startSerializedOverride != null ? !startSerializedOverride.equals(that.startSerializedOverride) : that.startSerializedOverride != null)
             return false;
-        if ( secondaryVariantClassificationSerializedOverride != null ? !secondaryVariantClassificationSerializedOverride.equals(that.secondaryVariantClassificationSerializedOverride) : that.secondaryVariantClassificationSerializedOverride != null )
+        if (endSerializedOverride != null ? !endSerializedOverride.equals(that.endSerializedOverride) : that.endSerializedOverride != null)
             return false;
-        if ( variantTypeSerializedOverride != null ? !variantTypeSerializedOverride.equals(that.variantTypeSerializedOverride) : that.variantTypeSerializedOverride != null )
+        if (variantClassificationSerializedOverride != null ? !variantClassificationSerializedOverride.equals(that.variantClassificationSerializedOverride) : that.variantClassificationSerializedOverride != null)
             return false;
-        if ( refAlleleSerializedOverride != null ? !refAlleleSerializedOverride.equals(that.refAlleleSerializedOverride) : that.refAlleleSerializedOverride != null )
+        if (secondaryVariantClassificationSerializedOverride != null ? !secondaryVariantClassificationSerializedOverride.equals(that.secondaryVariantClassificationSerializedOverride) : that.secondaryVariantClassificationSerializedOverride != null)
             return false;
-        if ( tumorSeqAllele1SerializedOverride != null ? !tumorSeqAllele1SerializedOverride.equals(that.tumorSeqAllele1SerializedOverride) : that.tumorSeqAllele1SerializedOverride != null )
+        if (variantTypeSerializedOverride != null ? !variantTypeSerializedOverride.equals(that.variantTypeSerializedOverride) : that.variantTypeSerializedOverride != null)
             return false;
-        if ( tumorSeqAllele2SerializedOverride != null ? !tumorSeqAllele2SerializedOverride.equals(that.tumorSeqAllele2SerializedOverride) : that.tumorSeqAllele2SerializedOverride != null )
+        if (refAlleleSerializedOverride != null ? !refAlleleSerializedOverride.equals(that.refAlleleSerializedOverride) : that.refAlleleSerializedOverride != null)
             return false;
-        if ( genomeChangeSerializedOverride != null ? !genomeChangeSerializedOverride.equals(that.genomeChangeSerializedOverride) : that.genomeChangeSerializedOverride != null )
+        if (tumorSeqAllele1SerializedOverride != null ? !tumorSeqAllele1SerializedOverride.equals(that.tumorSeqAllele1SerializedOverride) : that.tumorSeqAllele1SerializedOverride != null)
             return false;
-        if ( annotationTranscriptSerializedOverride != null ? !annotationTranscriptSerializedOverride.equals(that.annotationTranscriptSerializedOverride) : that.annotationTranscriptSerializedOverride != null )
+        if (tumorSeqAllele2SerializedOverride != null ? !tumorSeqAllele2SerializedOverride.equals(that.tumorSeqAllele2SerializedOverride) : that.tumorSeqAllele2SerializedOverride != null)
             return false;
-        if ( transcriptStrandSerializedOverride != null ? !transcriptStrandSerializedOverride.equals(that.transcriptStrandSerializedOverride) : that.transcriptStrandSerializedOverride != null )
+        if (genomeChangeSerializedOverride != null ? !genomeChangeSerializedOverride.equals(that.genomeChangeSerializedOverride) : that.genomeChangeSerializedOverride != null)
             return false;
-        if ( transcriptExonSerializedOverride != null ? !transcriptExonSerializedOverride.equals(that.transcriptExonSerializedOverride) : that.transcriptExonSerializedOverride != null )
+        if (annotationTranscriptSerializedOverride != null ? !annotationTranscriptSerializedOverride.equals(that.annotationTranscriptSerializedOverride) : that.annotationTranscriptSerializedOverride != null)
             return false;
-        if ( transcriptPosSerializedOverride != null ? !transcriptPosSerializedOverride.equals(that.transcriptPosSerializedOverride) : that.transcriptPosSerializedOverride != null )
+        if (transcriptStrandSerializedOverride != null ? !transcriptStrandSerializedOverride.equals(that.transcriptStrandSerializedOverride) : that.transcriptStrandSerializedOverride != null)
             return false;
-        if ( cDnaChangeSerializedOverride != null ? !cDnaChangeSerializedOverride.equals(that.cDnaChangeSerializedOverride) : that.cDnaChangeSerializedOverride != null )
+        if (transcriptExonSerializedOverride != null ? !transcriptExonSerializedOverride.equals(that.transcriptExonSerializedOverride) : that.transcriptExonSerializedOverride != null)
             return false;
-        if ( codonChangeSerializedOverride != null ? !codonChangeSerializedOverride.equals(that.codonChangeSerializedOverride) : that.codonChangeSerializedOverride != null )
+        if (transcriptPosSerializedOverride != null ? !transcriptPosSerializedOverride.equals(that.transcriptPosSerializedOverride) : that.transcriptPosSerializedOverride != null)
             return false;
-        if ( proteinChangeSerializedOverride != null ? !proteinChangeSerializedOverride.equals(that.proteinChangeSerializedOverride) : that.proteinChangeSerializedOverride != null )
+        if (cDnaChangeSerializedOverride != null ? !cDnaChangeSerializedOverride.equals(that.cDnaChangeSerializedOverride) : that.cDnaChangeSerializedOverride != null)
             return false;
-        if ( gcContentSerializedOverride != null ? !gcContentSerializedOverride.equals(that.gcContentSerializedOverride) : that.gcContentSerializedOverride != null )
+        if (codonChangeSerializedOverride != null ? !codonChangeSerializedOverride.equals(that.codonChangeSerializedOverride) : that.codonChangeSerializedOverride != null)
             return false;
-        if ( referenceContextSerializedOverride != null ? !referenceContextSerializedOverride.equals(that.referenceContextSerializedOverride) : that.referenceContextSerializedOverride != null )
+        if (proteinChangeSerializedOverride != null ? !proteinChangeSerializedOverride.equals(that.proteinChangeSerializedOverride) : that.proteinChangeSerializedOverride != null)
             return false;
-        return otherTranscriptsSerializedOverride != null ? otherTranscriptsSerializedOverride.equals(that.otherTranscriptsSerializedOverride) : that.otherTranscriptsSerializedOverride == null;
+        if (gcContentSerializedOverride != null ? !gcContentSerializedOverride.equals(that.gcContentSerializedOverride) : that.gcContentSerializedOverride != null)
+            return false;
+        if (referenceContextSerializedOverride != null ? !referenceContextSerializedOverride.equals(that.referenceContextSerializedOverride) : that.referenceContextSerializedOverride != null)
+            return false;
+        if (otherTranscriptsSerializedOverride != null ? !otherTranscriptsSerializedOverride.equals(that.otherTranscriptsSerializedOverride) : that.otherTranscriptsSerializedOverride != null)
+            return false;
+        return metadata != null ? metadata.equals(that.metadata) : that.metadata == null;
     }
 
     @Override
@@ -430,13 +439,15 @@ public class GencodeFuncotation implements Funcotation {
         result = 31 * result + (annotationTranscript != null ? annotationTranscript.hashCode() : 0);
         result = 31 * result + (transcriptStrand != null ? transcriptStrand.hashCode() : 0);
         result = 31 * result + (transcriptExon != null ? transcriptExon.hashCode() : 0);
-        result = 31 * result + (transcriptPos != null ? transcriptPos.hashCode() : 0);
+        result = 31 * result + (transcriptStartPos != null ? transcriptStartPos.hashCode() : 0);
+        result = 31 * result + (transcriptEndPos != null ? transcriptEndPos.hashCode() : 0);
         result = 31 * result + (cDnaChange != null ? cDnaChange.hashCode() : 0);
         result = 31 * result + (codonChange != null ? codonChange.hashCode() : 0);
         result = 31 * result + (proteinChange != null ? proteinChange.hashCode() : 0);
         result = 31 * result + (gcContent != null ? gcContent.hashCode() : 0);
         result = 31 * result + (referenceContext != null ? referenceContext.hashCode() : 0);
         result = 31 * result + (otherTranscripts != null ? otherTranscripts.hashCode() : 0);
+        result = 31 * result + (dataSourceName != null ? dataSourceName.hashCode() : 0);
         result = 31 * result + (locusLevel != null ? locusLevel.hashCode() : 0);
         result = 31 * result + (apprisRank != null ? apprisRank.hashCode() : 0);
         result = 31 * result + (transcriptLength != null ? transcriptLength.hashCode() : 0);
@@ -464,61 +475,8 @@ public class GencodeFuncotation implements Funcotation {
         result = 31 * result + (gcContentSerializedOverride != null ? gcContentSerializedOverride.hashCode() : 0);
         result = 31 * result + (referenceContextSerializedOverride != null ? referenceContextSerializedOverride.hashCode() : 0);
         result = 31 * result + (otherTranscriptsSerializedOverride != null ? otherTranscriptsSerializedOverride.hashCode() : 0);
+        result = 31 * result + (metadata != null ? metadata.hashCode() : 0);
         return result;
-    }
-
-    @Override
-    public String toString() {
-        return "GencodeFuncotation{" +
-                "hugoSymbol='" + hugoSymbol + '\'' +
-                ", ncbiBuild='" + ncbiBuild + '\'' +
-                ", chromosome='" + chromosome + '\'' +
-                ", start=" + start +
-                ", end=" + end +
-                ", variantClassification=" + variantClassification +
-                ", secondaryVariantClassification=" + secondaryVariantClassification +
-                ", variantType=" + variantType +
-                ", refAllele='" + refAllele + '\'' +
-                ", tumorSeqAllele2='" + tumorSeqAllele2 + '\'' +
-                ", genomeChange='" + genomeChange + '\'' +
-                ", annotationTranscript='" + annotationTranscript + '\'' +
-                ", transcriptStrand='" + transcriptStrand + '\'' +
-                ", transcriptExon=" + transcriptExon +
-                ", transcriptPos=" + transcriptPos +
-                ", cDnaChange='" + cDnaChange + '\'' +
-                ", codonChange='" + codonChange + '\'' +
-                ", proteinChange='" + proteinChange + '\'' +
-                ", gcContent=" + gcContent +
-                ", referenceContext='" + referenceContext + '\'' +
-                ", otherTranscripts=" + otherTranscripts +
-                ", locusLevel=" + locusLevel +
-                ", apprisRank=" + apprisRank +
-                ", transcriptLength=" + transcriptLength +
-                ", version='" + version + '\'' +
-                ", geneTranscriptType=" + geneTranscriptType +
-                ", hugoSymbolSerializedOverride='" + hugoSymbolSerializedOverride + '\'' +
-                ", ncbiBuildSerializedOverride='" + ncbiBuildSerializedOverride + '\'' +
-                ", chromosomeSerializedOverride='" + chromosomeSerializedOverride + '\'' +
-                ", startSerializedOverride='" + startSerializedOverride + '\'' +
-                ", endSerializedOverride='" + endSerializedOverride + '\'' +
-                ", variantClassificationSerializedOverride='" + variantClassificationSerializedOverride + '\'' +
-                ", secondaryVariantClassificationSerializedOverride='" + secondaryVariantClassificationSerializedOverride + '\'' +
-                ", variantTypeSerializedOverride='" + variantTypeSerializedOverride + '\'' +
-                ", refAlleleSerializedOverride='" + refAlleleSerializedOverride + '\'' +
-                ", tumorSeqAllele1SerializedOverride='" + tumorSeqAllele1SerializedOverride + '\'' +
-                ", tumorSeqAllele2SerializedOverride='" + tumorSeqAllele2SerializedOverride + '\'' +
-                ", genomeChangeSerializedOverride='" + genomeChangeSerializedOverride + '\'' +
-                ", annotationTranscriptSerializedOverride='" + annotationTranscriptSerializedOverride + '\'' +
-                ", transcriptStrandSerializedOverride='" + transcriptStrandSerializedOverride + '\'' +
-                ", transcriptExonSerializedOverride='" + transcriptExonSerializedOverride + '\'' +
-                ", transcriptPosSerializedOverride='" + transcriptPosSerializedOverride + '\'' +
-                ", cDnaChangeSerializedOverride='" + cDnaChangeSerializedOverride + '\'' +
-                ", codonChangeSerializedOverride='" + codonChangeSerializedOverride + '\'' +
-                ", proteinChangeSerializedOverride='" + proteinChangeSerializedOverride + '\'' +
-                ", gcContentSerializedOverride='" + gcContentSerializedOverride + '\'' +
-                ", referenceContextSerializedOverride='" + referenceContextSerializedOverride + '\'' +
-                ", otherTranscriptsSerializedOverride='" + otherTranscriptsSerializedOverride + '\'' +
-                '}';
     }
 
     //==================================================================================================================
@@ -635,12 +593,20 @@ public class GencodeFuncotation implements Funcotation {
         this.transcriptExon = transcriptExonNumber;
     }
 
-    public Integer getTranscriptPos() {
-        return transcriptPos;
+    public Integer getTranscriptStartPos() {
+        return transcriptStartPos;
     }
 
-    public void setTranscriptPos(final Integer transcriptPos) {
-        this.transcriptPos = transcriptPos;
+    public void setTranscriptStartPos(final Integer transcriptStartPos) {
+        this.transcriptStartPos = transcriptStartPos;
+    }
+
+    public Integer getTranscriptEndPos() {
+        return transcriptEndPos;
+    }
+
+    public void setTranscriptEndPos(final Integer transcriptEndPos) {
+        this.transcriptEndPos = transcriptEndPos;
     }
 
     public String getcDnaChange() {
@@ -710,6 +676,13 @@ public class GencodeFuncotation implements Funcotation {
         return referenceContext;
     }
 
+    /**
+     * Set the reference context string.  The reference context string is a string of N (configurable) bases around the
+     * locus of the variant on the reference genome.
+     * The reference context string is always represented by bases from the + strand around the variant, regardless of
+     * the strandedness of the variant itself.
+     * @param referenceContext The string of bases around a variant to set as the referenceContext.
+     */
     public void setReferenceContext(final String referenceContext) {
         this.referenceContext = referenceContext;
     }
@@ -726,35 +699,26 @@ public class GencodeFuncotation implements Funcotation {
         this.geneTranscriptType = geneTranscriptType;
     }
 
+    public void setDataSourceName(final String dataSourceName) {
+        this.dataSourceName = dataSourceName;
+    }
+
+    public void setMetadata(final FuncotationMetadata metadata) {
+        this.metadata = metadata;
+    }
+
     //==================================================================================================================
 
-    /**
-     * The names of the fields in this GencodeFuncotation.
-     * Used to access the field map.
-     */
-    private enum FieldName {
-        hugoSymbol,
-        ncbiBuild,
-        chromosome,
-        start,
-        end,
-        variantClassification,
-        secondaryVariantClassification,
-        variantType,
-        refAllele,
-        tumorSeqAllele1,
-        tumorSeqAllele2,
-        genomeChange,
-        annotationTranscript,
-        transcriptStrand,
-        transcriptExon,
-        transcriptPos,
-        cDnaChange,
-        codonChange,
-        proteinChange,
-        gcContent,
-        referenceContext,
-        otherTranscripts;
+    private String getTranscriptPosString() {
+        if ( transcriptStartPos == null ) {
+            return "";
+        }
+
+        if ( transcriptStartPos.equals(transcriptEndPos) ) {
+            return String.valueOf(transcriptStartPos);
+        }
+
+        return transcriptStartPos + "_" + transcriptEndPos;
     }
 
     //==================================================================================================================
@@ -767,7 +731,7 @@ public class GencodeFuncotation implements Funcotation {
         TNP("TNP"),
         ONP("ONP"),
         MNP("MNP"),
-        xNP("NP");
+        NA("NA");
 
         final private String serialized;
 
@@ -788,7 +752,7 @@ public class GencodeFuncotation implements Funcotation {
     public enum VariantClassification {
 
         /** Variant classification could not be determined. */
-        COULD_NOT_DETERMINE("",99),
+        COULD_NOT_DETERMINE("COULD_NOT_DETERMINE",99),
 
         // Only for Introns:
         /** Variant lies between exons within the bounds of the chosen transcript. */
@@ -803,9 +767,11 @@ public class GencodeFuncotation implements Funcotation {
         // Only for IGRs:
         /** Intergenic region. Does not overlap any transcript. */
         IGR("IGR", 20),
-        /** The variant is upstream of the chosen transcript (within 3kb) */
+        /** The variant is upstream of the chosen transcript */
         FIVE_PRIME_FLANK("FIVE_PRIME_FLANK", 15),
-
+        /** The variant is downstream of the chosen transcript */
+        THREE_PRIME_FLANK("THREE_PRIME_FLANK", 16),
+        
         // These can be in Coding regions or Introns (only SPLICE_SITE):
         /** The point mutation alters the protein structure by one amino acid. */
         MISSENSE("MISSENSE", 1),
@@ -817,13 +783,13 @@ public class GencodeFuncotation implements Funcotation {
         SILENT("SILENT", 5),
         /** The variant is within a configurable number of bases (default=2) of a splice site. See the secondary classification to determine if it lies on the exon or intron side. */
         SPLICE_SITE("SPLICE_SITE", 4),
-        /** Deletion that keeps the sequence in frame (i.e. deletion of a length evenly divisible by 3). */
+        /** Deletion that keeps the sequence in frame (i.e. deletion of a length evenly divisible by {@link org.broadinstitute.hellbender.tools.funcotator.AminoAcid#CODON_LENGTH}). */
         IN_FRAME_DEL("IN_FRAME_DEL", 1),
-        /** Insertion that keeps the sequence in frame (i.e. insertion of a length evenly divisible by 3). */
+        /** Insertion that keeps the sequence in frame (i.e. insertion of a length evenly divisible by {@link org.broadinstitute.hellbender.tools.funcotator.AminoAcid#CODON_LENGTH}). */
         IN_FRAME_INS("IN_FRAME_INS", 1),
-        /** Insertion that moves the coding sequence out of frame (i.e. insertion of a length not evenly divisible by 3). */
+        /** Insertion that moves the coding sequence out of frame (i.e. insertion of a length not evenly divisible by {@link org.broadinstitute.hellbender.tools.funcotator.AminoAcid#CODON_LENGTH}). */
         FRAME_SHIFT_INS("FRAME_SHIFT_INS", 2),
-        /** Deletion that moves the sequence out of frame (i.e. deletion of a length not evenly divisible by 3). */
+        /** Deletion that moves the sequence out of frame (i.e. deletion of a length not evenly divisible by {@link org.broadinstitute.hellbender.tools.funcotator.AminoAcid#CODON_LENGTH}). */
         FRAME_SHIFT_DEL("FRAME_SHIFT_DEL", 2),
         /** Point mutation that overlaps the start codon. */
         START_CODON_SNP("START_CODON_SNP", 3),
@@ -832,10 +798,21 @@ public class GencodeFuncotation implements Funcotation {
         /** Deletion that overlaps the start codon. */
         START_CODON_DEL("START_CODON_DEL", 3),
 
-        // These can only be in 5' UTRs:
-        /** New start codon is created by the given variant using the chosen transcript. However, it is in frame relative to the coded protein. */
+        /** New start codon is created by the given variant using the chosen transcript.
+         * However, it is in frame relative to the coded protein, meaning that if the coding sequence were extended
+         * (either before the start codon or after the stop codon) then the new start codon would be in frame with the
+         * existing start and stop codons.
+         *
+         * This can only occur in a 5' UTR.
+         */
         DE_NOVO_START_IN_FRAME("DE_NOVO_START_IN_FRAME", 1),
-        /** New start codon is created by the given variant using the chosen transcript. However, it is out of frame relative to the coded protein. */
+        /** New start codon is created by the given variant using the chosen transcript.
+         * However, it is out of frame relative to the coded protein, meaning that if the coding sequence were extended
+         * (either before the start codon or after the stop codon) then the new start codon would NOT be in frame with
+         * the existing start and stop codons.
+         *
+         * This can only occur in a 5' UTR.
+         */
         DE_NOVO_START_OUT_FRAME("DE_NOVO_START_OUT_FRAME", 0),
 
         // These are special / catch-all cases:

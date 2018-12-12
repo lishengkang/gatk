@@ -6,8 +6,8 @@ import htsjdk.variant.vcf.VCFConstants;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
-import org.broadinstitute.hellbender.engine.datasources.ReferenceWindowFunctions;
+import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceMultiSparkSource;
+import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceWindowFunctions;
 import org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.SimpleSVType;
 import org.broadinstitute.hellbender.tools.spark.sv.evidence.EvidenceTargetLink;
@@ -16,7 +16,7 @@ import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.PairedStrandedIntervalTree;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.SVInterval;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.StrandedInterval;
-import org.broadinstitute.hellbender.utils.test.VariantContextTestUtils;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.mockito.Mockito;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -42,7 +42,7 @@ public class ImpreciseVariantDetectorUnitTest extends GATKBaseTest {
                 .chr("20").start(1000).stop(2000)
                 .alleles("N", SimpleSVType.ImpreciseDeletion.createBracketedSymbAlleleString(GATKSVVCFConstants.SYMB_ALT_ALLELE_DEL))
                 .attribute(VCFConstants.END_KEY, 2000)
-                .attribute(GATKSVVCFConstants.SVTYPE, SimpleSVType.TYPES.DEL.toString())
+                .attribute(GATKSVVCFConstants.SVTYPE, SimpleSVType.SupportedType.DEL.toString())
                 .attribute(GATKSVVCFConstants.READ_PAIR_SUPPORT, 7)
                 .attribute(GATKSVVCFConstants.SPLIT_READ_SUPPORT, 5)
                 .attribute(GATKSVVCFConstants.IMPRECISE, true)
@@ -68,12 +68,12 @@ public class ImpreciseVariantDetectorUnitTest extends GATKBaseTest {
     public void testProcessEvidenceTargetLinks(final List<EvidenceTargetLink> etls,
                                                final List<VariantContext> expectedVariants) {
         final int impreciseEvidenceVariantCallingThreshold =
-                new StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection().impreciseVariantEvidenceThreshold;
+                new StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsSparkArgumentCollection().impreciseVariantEvidenceThreshold;
 
         final int maxCallableImpreciseVariantDeletionSize =
-                new StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection().maxCallableImpreciseVariantDeletionSize;
+                new StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsSparkArgumentCollection().maxCallableImpreciseVariantDeletionSize;
 
-        final ReferenceMultiSource referenceMultiSource = new ReferenceMultiSource(twoBitRefURL, ReferenceWindowFunctions.IDENTITY_FUNCTION);
+        final ReferenceMultiSparkSource referenceMultiSource = new ReferenceMultiSparkSource(twoBitRefURL, ReferenceWindowFunctions.IDENTITY_FUNCTION);
 
         ReadMetadata metadata = Mockito.mock(ReadMetadata.class);
         when(metadata.getMaxMedianFragmentSize()).thenReturn(300);

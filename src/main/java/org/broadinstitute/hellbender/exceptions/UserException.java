@@ -2,16 +2,16 @@ package org.broadinstitute.hellbender.exceptions;
 
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.tribble.Feature;
+import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.tools.walkers.variantutils.ValidateVariants;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.help.HelpConstants;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Set;
 
 /**
  * <p/>
@@ -106,6 +106,10 @@ public class UserException extends RuntimeException {
     public static class MissingIndex extends UserException {
         private static final long serialVersionUID = 0L;
 
+        public MissingIndex(String message){
+            super(message);
+        }
+
         public MissingIndex(String file, String message) {
             super(String.format("An index is required but was not found for file %s. %s", file, message));
         }
@@ -135,6 +139,10 @@ public class UserException extends RuntimeException {
 
         public CouldNotCreateOutputFile(File file, String message) {
             super(String.format("Couldn't write file %s because %s", file.getAbsolutePath(), message));
+        }
+
+        public CouldNotCreateOutputFile(String file, String message) {
+            super(String.format("Couldn't write file %s because %s", file, message));
         }
 
         public CouldNotCreateOutputFile(String filename, String message, Exception e) {
@@ -183,12 +191,22 @@ public class UserException extends RuntimeException {
     }
 
 
-    public static class BadTmpDir extends UserException {
+    public static class BadTempDir extends UserException {
         private static final long serialVersionUID = 0L;
 
-        public BadTmpDir(String message) {
-            super(String.format("Failure working with the tmp directory %s. Override with -Djava.io.tmpdir=X on the command line to a bigger/better file system.  Exact error was %s", System.getProperties().get("java.io.tmpdir"), message));
+        private static final String MESSAGE_FORMAT_STRING = "Failure working with the tmp directory %s. Try changing the tmp dir with with --" + StandardArgumentDefinitions.TMP_DIR_NAME + " on the command line.  Exact error was %s";
+        public BadTempDir(String message) {
+            super(String.format(MESSAGE_FORMAT_STRING, System.getProperties().get("java.io.tmpdir"), message));
         }
+
+        public BadTempDir(String message, Throwable cause) {
+            super(String.format(MESSAGE_FORMAT_STRING, System.getProperties().get("java.io.tmpdir"), message), cause);
+        }
+
+        public BadTempDir(Path tmpDir, String message, Throwable cause) {
+            super(String.format(MESSAGE_FORMAT_STRING, IOUtils.getAbsolutePathWithoutFileProtocol(tmpDir), message), cause);
+        }
+
     }
 
     public static class MalformedGenomeLoc extends UserException {
@@ -239,6 +257,14 @@ public class UserException extends RuntimeException {
             super(String.format("Fasta index file %s for reference %s does not exist. Please see %s for help creating it.",
                     indexPath.toUri(), fastaPath.toUri(),
                     HelpConstants.forumPost("discussion/1601/how-can-i-prepare-a-fasta-file-to-use-as-reference")));
+        }
+    }
+
+    public static class MissingReferenceGziFile extends UserException {
+        private static final long serialVersionUID = 0L;
+        public MissingReferenceGziFile( final Path gziPath, final Path fastaPath ) {
+            super(String.format("Fasta bgzip index file %s for reference %s does not exist. A gzi index can be created using bgzip.",
+                                gziPath.toUri(), fastaPath.toUri()));
         }
     }
 
@@ -358,7 +384,7 @@ public class UserException extends RuntimeException {
         private static final long serialVersionUID = 0L;
 
         public NoSuitableCodecs(final Path file) {
-            super("Cannot read " + file + " because no suitable codecs found");
+            super("Cannot read " + file.toUri().toString() + " because no suitable codecs found");
         }
     }
 
@@ -381,6 +407,14 @@ public class UserException extends RuntimeException {
 
         public ReadMissingReadGroup(final GATKRead read) {
             super(read, String.format("Read %s is missing the read group (RG) tag, which is required by the GATK.  Please use " + HelpConstants.forumPost("discussion/59/companion-utilities-replacereadgroups to fix this problem"), read.getName()));
+        }
+    }
+
+    public static final class HeaderMissingReadGroup extends MalformedBAM {
+        private static final long serialVersionUID = 0L;
+
+        public HeaderMissingReadGroup(final GATKRead read) {
+            super(read, String.format("Read %s contains an (RG) tag with the group %s which is not found in the file header.", read.getName(), read.getAttributeAsString("RG")));
         }
     }
 

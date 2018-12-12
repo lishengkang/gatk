@@ -13,13 +13,13 @@ import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
-import org.broadinstitute.hellbender.cmdline.GATKPlugin.DefaultGATKVariantAnnotationArgumentCollection;
-import org.broadinstitute.hellbender.cmdline.GATKPlugin.GATKAnnotationArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.argumentcollections.DbsnpArgumentCollection;
 import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.MultiVariantWalkerGroupedOnStart;
 import org.broadinstitute.hellbender.engine.ReferenceContext;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.annotator.Annotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.StandardAnnotation;
 import org.broadinstitute.hellbender.tools.walkers.annotator.VariantAnnotatorEngine;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
@@ -81,15 +81,6 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
     public static final String BP_RES_LONG_NAME = "convert-to-base-pair-resolution";
     public static final String BREAK_BANDS_LONG_NAME = "break-bands-at-multiples-of";
 
-    /**
-     * Which groups of annotations to add to the output VCF file.
-     */
-    @ArgumentCollection
-    public GATKAnnotationArgumentCollection variantAnnotationArgumentCollection = new DefaultGATKVariantAnnotationArgumentCollection(
-            Arrays.asList(StandardAnnotation.class.getSimpleName()),
-            Collections.emptyList(),
-            Collections.emptyList());
-
     @Argument(fullName= StandardArgumentDefinitions.OUTPUT_LONG_NAME,
             shortName=StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             doc="The combined GVCF output file", optional=false)
@@ -103,10 +94,18 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
      * span across a given genomic position (e.g. when scatter-gathering jobs across a compute farm).  The option below enables users to break bands at
      * pre-defined positions.  For example, a value of 10,000 would mean that we would ensure that no bands span across chr1:10000, chr1:20000, etc.
      *
-     * Note that the --convertToBasePairResolution argument is just a special case of this argument with a value of 1.
+     * Note that the --convert-to-base-pair-resolution argument is just a special case of this argument with a value of 1.
      */
     @Argument(fullName=BREAK_BANDS_LONG_NAME, doc = "If > 0, reference bands will be broken up at genomic positions that are multiples of this number", optional=true)
     protected int multipleAtWhichToBreakBands = 0;
+
+    @Override
+    public boolean useVariantAnnotations() { return true;}
+
+    @Override
+    public List<Class<? extends Annotation>> getDefaultVariantAnnotationGroups() {
+        return Collections.singletonList(StandardAnnotation.class);
+    }
 
     /**
      * The rsIDs from this file are used to populate the ID column of the output.  Also, the DB INFO flag will be set when appropriate. Note that dbSNP is not used in any way for the calculations themselves.
@@ -123,6 +122,15 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
 
     @Override
     public void apply(List<VariantContext> variantContexts, ReferenceContext referenceContext) {
+        // Check that the input variant contexts do not contain MNPs as these may not be properly merged
+        for (final VariantContext ctx : variantContexts) {
+            if (GATKVariantContextUtils.isUnmixedMnpIgnoringNonRef(ctx)) {
+                throw new UserException.BadInput(String.format(
+                        "Combining gVCFs containing MNPs is not supported. %1s contained a MNP at %2s:%3d",
+                        ctx.getSource(), ctx.getContig(), ctx.getStart()));
+            }
+        }
+
         // If we need to stop at an intermediate site since the last apply, do so (caused by gvcfBlocks, contexts ending, etc...)
         if (!variantContextsOverlappingCurrentMerge.isEmpty()) {
             Locatable last = prevPos!=null && prevPos.getContig().equals(variantContextsOverlappingCurrentMerge.get(0).getContig()) ?  prevPos : variantContextsOverlappingCurrentMerge.get(0);
@@ -152,15 +160,15 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
      */
     @VisibleForTesting
     void createIntermediateVariants(SimpleInterval intervalToClose) {
-        Set<Integer> sitesToStop = new HashSet<>();
         resizeReferenceIfNeeded(intervalToClose);
 
         // Break up the GVCF according to the provided reference blocking scheme
-        if ( multipleAtWhichToBreakBands > 0) {
-            for (int i = ((intervalToClose.getStart())/multipleAtWhichToBreakBands)*multipleAtWhichToBreakBands; i <= intervalToClose.getEnd(); i+=multipleAtWhichToBreakBands) {
-                sitesToStop.add(i-1); // Subtract 1 here because we want to split before this base
-            }
-        }
+        // The values returned from getIntermediateStopSites represent a proposed set of stop sites that may include
+        // intervals that are outside the actual interval being closed. These sites are filtered out below.
+        // Note: Precomputing these is really inefficient when large reference blocks are closed with
+        // fine band resolution because it results in very large collections of stop sites (tens or hundreds of millions)
+        // that must subsequently be sorted.
+        final Set<Integer> sitesToStop = getIntermediateStopSites(intervalToClose, multipleAtWhichToBreakBands);
 
         // If any variant contexts ended (or were spanning deletions) the last context compute where we should stop them
         for (VariantContext vc : variantContextsOverlappingCurrentMerge) {
@@ -181,7 +189,7 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
         List<Integer> stoppedLocs = new ArrayList<>(sitesToStop);
         stoppedLocs.sort(Comparator.naturalOrder());
 
-        // For each stopped loc, create a fake QueuedContextState and pass it to endPreviousStats
+        // For each stopped loc that is within the interval being closed, create a fake QueuedContextState and pass it to endPreviousStats
         for (int stoppedLoc : stoppedLocs) {
             SimpleInterval loc = new SimpleInterval(intervalToClose.getContig(), stoppedLoc, stoppedLoc);
             if (( stoppedLoc <= intervalToClose.getEnd() && stoppedLoc>= intervalToClose.getStart()) && isWithinInterval(loc)) {
@@ -190,6 +198,25 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
             }
         }
 
+    }
+
+    // Get any intermediate stop sites based on the break band multiple.
+    @VisibleForTesting
+    protected final static Set<Integer> getIntermediateStopSites(final SimpleInterval intervalToClose, final int breakBandMultiple) {
+        final Set<Integer> sitesToStop = new HashSet<>();
+
+        if ( breakBandMultiple > 0) {
+            // if the intermediate interval to close starts before the end of the first band multiple,
+            // create the first stop position at the end of the band multiple
+            for (int blockEndPosition = intervalToClose.getStart() < (breakBandMultiple + 1) ?
+                    Math.max(2, breakBandMultiple) :
+                    (intervalToClose.getStart() / breakBandMultiple) * breakBandMultiple;
+                 blockEndPosition <= intervalToClose.getEnd();
+                 blockEndPosition += breakBandMultiple) {
+                sitesToStop.add(blockEndPosition - 1); // Subtract 1 here because we want to split before this base
+            }
+        }
+        return sitesToStop;
     }
 
     /**
@@ -207,7 +234,7 @@ public final class CombineGVCFs extends MultiVariantWalkerGroupedOnStart {
     @Override
     public void onTraversalStart() {
         // create the annotation engine
-        annotationEngine = VariantAnnotatorEngine.ofSelectedMinusExcluded(variantAnnotationArgumentCollection, dbsnp.dbsnp, Collections.emptyList(), false);
+        annotationEngine = new VariantAnnotatorEngine(makeVariantAnnotations(), dbsnp.dbsnp, Collections.emptyList(), false);
 
         vcfWriter = getVCFWriter();
 

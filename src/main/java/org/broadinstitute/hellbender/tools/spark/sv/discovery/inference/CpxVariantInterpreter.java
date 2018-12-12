@@ -8,25 +8,23 @@ import htsjdk.variant.vcf.VCFConstants;
 import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.broadcast.Broadcast;
-import org.broadinstitute.hellbender.engine.datasources.ReferenceMultiSource;
+import org.broadinstitute.hellbender.engine.spark.datasources.ReferenceMultiSparkSource;
 import org.broadinstitute.hellbender.exceptions.GATKException;
-import org.broadinstitute.hellbender.exceptions.UserException;
-import org.broadinstitute.hellbender.tools.spark.sv.discovery.SvDiscoveryInputData;
+import org.broadinstitute.hellbender.tools.spark.sv.discovery.SvDiscoveryInputMetaData;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignedContig;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AlignmentInterval;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.AssemblyContigWithFineTunedAlignments;
 import org.broadinstitute.hellbender.tools.spark.sv.discovery.alignment.ContigAlignmentsModifier;
 import org.broadinstitute.hellbender.utils.IntervalUtils;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
 import scala.Tuple2;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
 
-import static org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection.CHIMERIC_ALIGNMENTS_HIGHMQ_THRESHOLD;
+import static org.broadinstitute.hellbender.tools.spark.sv.StructuralVariationDiscoveryArgumentCollection.DiscoverVariantsFromContigAlignmentsSparkArgumentCollection.CHIMERIC_ALIGNMENTS_HIGHMQ_THRESHOLD;
 import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants.*;
 
 /**
@@ -39,25 +37,32 @@ import static org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConsta
  */
 public final class CpxVariantInterpreter {
 
-    public static List<VariantContext> inferCpxVariant(final JavaRDD<AssemblyContigWithFineTunedAlignments> assemblyContigs,
-                                                       final SvDiscoveryInputData svDiscoveryInputData) {
+    public static final int MIN_READ_SPAN_AFTER_DEOVERLAP = 2;
 
-        final Broadcast<ReferenceMultiSource> referenceBroadcast = svDiscoveryInputData.referenceBroadcast;
-        final Broadcast<SAMSequenceDictionary> referenceSequenceDictionaryBroadcast = svDiscoveryInputData.referenceSequenceDictionaryBroadcast;
+    public static List<VariantContext> makeInterpretation(final JavaRDD<AssemblyContigWithFineTunedAlignments> assemblyContigs,
+                                                          final SvDiscoveryInputMetaData svDiscoveryInputMetaData) {
+
+        final Broadcast<ReferenceMultiSparkSource> referenceBroadcast = svDiscoveryInputMetaData.getReferenceData().getReferenceBroadcast();
+        final Broadcast<SAMSequenceDictionary> referenceSequenceDictionaryBroadcast = svDiscoveryInputMetaData.getReferenceData().getReferenceSequenceDictionaryBroadcast();
 
         // almost every thing happens in this series of maps
         final JavaPairRDD<CpxVariantCanonicalRepresentation, Iterable<CpxVariantInducingAssemblyContig>> interpretationAndAssemblyEvidence =
                 assemblyContigs
-                        .map(tig -> furtherPreprocess(tig, referenceSequenceDictionaryBroadcast.getValue()))
-                        .map(tig -> new CpxVariantInducingAssemblyContig(tig, referenceSequenceDictionaryBroadcast.getValue()))
-                        .mapToPair(tig -> new Tuple2<>(new CpxVariantCanonicalRepresentation(tig), tig))
+                        .mapToPair(tig -> getOneVariantFromOneContig(tig, referenceSequenceDictionaryBroadcast.getValue()))
                         .groupByKey(); // two contigs could give the same variant
 
-        if (svDiscoveryInputData.discoverStageArgs.outputCpxResultsInHumanReadableFormat) {
-            writeResultsForHumanConsumption(svDiscoveryInputData.outputPath, interpretationAndAssemblyEvidence);
-        }
+        return interpretationAndAssemblyEvidence.map(pair -> turnIntoVariantContext(pair, referenceBroadcast.getValue())).collect();
+    }
 
-        return interpretationAndAssemblyEvidence.map(pair -> turnIntoVariantContext(pair, referenceBroadcast)).collect();
+    private static Tuple2<CpxVariantCanonicalRepresentation, CpxVariantInducingAssemblyContig> getOneVariantFromOneContig
+            (final AssemblyContigWithFineTunedAlignments contigWithFineTunedAlignments,
+             final SAMSequenceDictionary refSequenceDictionary) {
+
+        final AssemblyContigWithFineTunedAlignments furtherProcessedContig =
+                furtherPreprocess(contigWithFineTunedAlignments, refSequenceDictionary);
+        final CpxVariantInducingAssemblyContig cpxVariantInducingAssemblyContig =
+                new CpxVariantInducingAssemblyContig(furtherProcessedContig, refSequenceDictionary);
+        return new Tuple2<>(new CpxVariantCanonicalRepresentation(cpxVariantInducingAssemblyContig), cpxVariantInducingAssemblyContig);
     }
 
     // =================================================================================================================
@@ -115,14 +120,19 @@ public final class CpxVariantInterpreter {
             }
             final int overlapOnContig = AlignmentInterval.overlapOnContig(one, two);
             if ( overlapOnContig == 0 ) { // nothing to remove
-                result.add(one);
+                // an extreme rare case is possible when, after de-overlapping, the alignment block is only 1bp long (yes, it occurs),
+                // this throws off segmentation algo, hence we drop it here
+                // more generally, the case could be that a small (say 2bp, or 5bp) alignment block is left, we need a more general strategy
+                if (one.getSizeOnRead() >= MIN_READ_SPAN_AFTER_DEOVERLAP)
+                    result.add(one);
                 one = two;
             } else {
                 final Tuple2<AlignmentInterval, AlignmentInterval> deoverlapped =
                         removeOverlap(one, two, overlapOnContig, refSequenceDictionary,
                                 one.equals(originalAlignments.get(0)),
                                 two.equals(originalAlignments.get(totalCount - 1)));
-                result.add(deoverlapped._1);
+                if (deoverlapped._1.getSizeOnRead() >= MIN_READ_SPAN_AFTER_DEOVERLAP) // see comment above
+                    result.add(deoverlapped._1);
                 one = deoverlapped._2;
             }
         }
@@ -155,7 +165,7 @@ public final class CpxVariantInterpreter {
                                                                       final int overlapOnRead,
                                                                       final SAMSequenceDictionary dictionary,
                                                                       final boolean firstIsAlignmentHead,
-                                                                      final boolean secondIsAlignmentTail){
+                                                                      final boolean secondIsAlignmentTail) {
 
         if (overlapOnRead <= 0)
             throw new IllegalArgumentException("Overlap on read is non-positive for two alignments: "
@@ -212,7 +222,7 @@ public final class CpxVariantInterpreter {
      *                     b) when the two alignments' ref span do overlap,
      *                        we makes it so that the inverted duplicated reference span is minimized
      *                        (this avoids over detection of inverted duplications by
-     *                        {@link AssemblyContigAlignmentSignatureClassifier#isCandidateInvertedDuplication(AlignmentInterval, AlignmentInterval)}}
+     *                        {@link SimpleChimera#isCandidateInvertedDuplication()}}
      *                 </li>
      *             </ul>
      *         </li>
@@ -261,11 +271,11 @@ public final class CpxVariantInterpreter {
 
     @VisibleForTesting
     static VariantContext turnIntoVariantContext(final Tuple2<CpxVariantCanonicalRepresentation, Iterable<CpxVariantInducingAssemblyContig>> pair,
-                                                 final Broadcast<ReferenceMultiSource> referenceBroadcast)
+                                                 final ReferenceMultiSparkSource reference)
             throws IOException {
 
         final CpxVariantCanonicalRepresentation cpxVariantCanonicalRepresentation = pair._1;
-        final byte[] refBases = referenceBroadcast.getValue().getReferenceBases(cpxVariantCanonicalRepresentation.getAffectedRefRegion()).getBases();
+        final byte[] refBases = getRefBases(reference, cpxVariantCanonicalRepresentation);
 
         final VariantContextBuilder rawVariantContextBuilder = cpxVariantCanonicalRepresentation.toVariantContext(refBases);
         final Iterable<CpxVariantInducingAssemblyContig> evidenceContigs = pair._2;
@@ -322,29 +332,17 @@ public final class CpxVariantInterpreter {
         return rawVariantContextBuilder.make();
     }
 
-    // =================================================================================================================
-
-    private static void writeResultsForHumanConsumption(final String outputPath,
-                                                        final JavaPairRDD<CpxVariantCanonicalRepresentation, Iterable<CpxVariantInducingAssemblyContig>> interpretationAndAssemblyEvidence) {
-        try {
-            // for easier view when debugging, will be taken out in the final commit.
-            Files.write(Paths.get(Paths.get(outputPath).getParent().toAbsolutePath().toString() + "/cpxEvents.txt"),
-                    () -> interpretationAndAssemblyEvidence
-                            .flatMap(pair -> Utils.stream(pair._2).map( tig -> new Tuple2<>(tig, pair._1)).iterator())
-                            .sortBy(pair  -> pair._1.getPreprocessedTig().getContigName(), true, 1)
-                            .map(pair -> {
-                                final CpxVariantInducingAssemblyContig cpxVariantInducingAssemblyContig = pair._1;
-                                final CpxVariantCanonicalRepresentation cpxVariantCanonicalRepresentation = pair._2;
-                                String s = cpxVariantInducingAssemblyContig.toString() + "\n";
-                                s += cpxVariantCanonicalRepresentation.toString();
-                                s += "\n";
-                                return (CharSequence) s;
-                            })
-                            .collect().iterator());
-        } catch (final IOException ioe) {
-            throw new UserException.CouldNotCreateOutputFile("Could not save filtering results to file", ioe);
-        }
+    private static byte[] getRefBases( final ReferenceMultiSparkSource reference, final CpxVariantCanonicalRepresentation cpxVariantCanonicalRepresentation)
+            throws IOException {
+        final SimpleInterval affectedRefRegion = cpxVariantCanonicalRepresentation.getAffectedRefRegion();
+        SimpleInterval refBase = new SimpleInterval(affectedRefRegion.getContig(), affectedRefRegion.getStart(),
+                                                                                   affectedRefRegion.getStart());
+        return reference
+                .getReferenceBases(refBase)
+                .getBases();
     }
+
+    // =================================================================================================================
 
     static final class UnhandledCaseSeen extends GATKException.ShouldNeverReachHereException {
         private static final long serialVersionUID = 0L;

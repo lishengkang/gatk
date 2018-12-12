@@ -225,8 +225,8 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
         final Set<E> blacklistedEdgeSet = blacklistedEdge.isPresent() ? Collections.singleton(blacklistedEdge.get()) : Collections.emptySet();
 
         // if we got here, then we aren't on a reference path
-        final Optional<E> edge = outgoingEdges.stream().filter(e -> !blacklistedEdgeSet.contains(e)).findAny();
-        return edge.isPresent() ? getEdgeTarget(edge.get()) : null;
+        final List<E> edges = outgoingEdges.stream().filter(e -> !blacklistedEdgeSet.contains(e)).limit(2).collect(Collectors.toList());
+        return edges.size() == 1 ? getEdgeTarget(edges.get(0)) : null;
     }
 
     /**
@@ -428,17 +428,6 @@ public abstract class BaseGraph<V extends BaseVertex, E extends BaseEdge> extend
         }
 
         removeSingletonOrphanVertices();
-    }
-
-    /**
-     * Prune all chains from this graph where all edges in the path have multiplicity < pruneFactor
-     *
-     * @see LowWeightChainPruner for more information
-     *
-     * @param pruneFactor all edges with multiplicity < this factor that aren't ref edges will be removed
-     */
-    public final void pruneLowWeightChains( final int pruneFactor ) {
-        new LowWeightChainPruner<V,E>(pruneFactor).pruneLowWeightChains(this);
     }
 
     /**

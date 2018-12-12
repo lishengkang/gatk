@@ -4,6 +4,8 @@ import htsjdk.samtools.SAMFileHeader;
 import org.broadinstitute.barclay.argparser.Advanced;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.Hidden;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.utils.param.ParamUtils;
 
 import java.io.Serializable;
 
@@ -11,11 +13,17 @@ import java.io.Serializable;
 public class StructuralVariationDiscoveryArgumentCollection implements Serializable {
     private static final long serialVersionUID = 1L;
 
+    public static final int STRUCTURAL_VARIANT_SIZE_LOWER_BOUND = 50;
+
     public static class FindBreakpointEvidenceSparkArgumentCollection implements Serializable {
         private static final long serialVersionUID = 1L;
 
         public static final int KMER_SIZE = 51;
         public static final int MAX_DUST_SCORE = KMER_SIZE - 2;
+
+        public static final double TRAINING_SET_MEAN_COVERAGE = 42.855164; // mean overlap of data set used to tune evidence filtering
+        public static final int TRAINING_SET_OPTIMAL_MIN_OVERLAP = 15; // optimal min overlap of data set used to tune evidence
+        public static final int TRAINING_SET_OPTIMAL_MIN_COHERENCE = 7; // optimal min coherence of data set used to tune evidence
 
         //--------- parameters ----------
 
@@ -53,13 +61,15 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
                 fullName = "high-depth-coverage-factor")
         public int highDepthCoverageFactor = 3;
 
-        @Argument(doc = "Minimum weight of the corroborating read evidence to validate some single piece of evidence.",
-                fullName = "min-evidence-count")
-        public int minEvidenceWeight = 15;
+        @Argument(doc = "Minimum weight of the corroborating read evidence to validate some single piece of evidence, as a ratio of the mean coverage in the BAM. "
+                + "The default value is overlap-count / mean coverage ~ 15 / 42.9 ~ 0.350",
+                fullName = "min-evidence-coverage-ratio")
+        public double minEvidenceWeightPerCoverage = TRAINING_SET_OPTIMAL_MIN_OVERLAP / TRAINING_SET_MEAN_COVERAGE;
 
-        @Argument(doc = "Minimum weight of the evidence that shares a distal target locus to validate the evidence.",
-                fullName = "min-coherent-evidence-count")
-        public int minCoherentEvidenceWeight = 7;
+        @Argument(doc = "Minimum weight of the evidence that shares a distal target locus to validate the evidence, as a ratio of the mean coverage in the BAM. "
+                + "The default value is coherent-count / mean coverage ~ 7 / 42.9 ~ 0.163",
+                fullName = "min-coherent-evidence-coverage-ratio")
+        public double minCoherentEvidenceWeightPerCoverage = TRAINING_SET_OPTIMAL_MIN_COHERENCE / TRAINING_SET_MEAN_COVERAGE;
 
         @Argument(doc = "Minimum number of localizing kmers in a valid interval.", fullName="min-kmers-per-interval")
         public int minKmersPerInterval = 5;
@@ -104,6 +114,14 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
         @Argument(doc = "Adapter sequence.", fullName = "adapter-sequence", optional = true)
         public String adapterSequence;
 
+        @Argument(doc = "Minimum classified probability for a piece of evidence to pass xgboost evidence filter",
+                fullName = "sv-evidence-filter-threshold-probability")
+        public double svEvidenceFilterThresholdProbability = 0.92;
+
+        @Argument(doc = "Filter method for selecting evidence to group into Assembly Intervals",
+                fullName = "sv-evidence-filter-type")
+        public SvEvidenceFilterType svEvidenceFilterType = SvEvidenceFilterType.DENSITY;
+
         // ---------- options -----------
 
         @Argument(doc = "Write GFA representation of assemblies in fastq-dir.", fullName = "write-gfas")
@@ -120,6 +138,16 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
         @Advanced
         @Argument(doc = "Traverse assembly graph and produce contigs for all paths.", fullName = "expand-assembly-graph")
         public boolean expandAssemblyGraph = true;
+
+        @Advanced @Argument(doc = "ZDropoff (see Bwa mem manual) for contig alignment.", fullName = "z-dropoff")
+        public int zDropoff = 20;
+
+        @Argument(doc = "Allow evidence filter to run without gaps annotation (assume no gaps).", fullName = "run-without-gaps-annotation")
+        public boolean runWithoutGapsAnnotation = false;
+        @Argument(doc = "Allow evidence filter to run without annotation for single-read mappability of 100-mers (assume all mappable).",
+                fullName = "run-without-umap-s100-annotation")
+        public boolean runWithoutUmapS100Annotation = false;
+
 
         // --------- locations ----------
 
@@ -189,18 +217,67 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
         private static final String OUTPUT_ORDER_SHORT_NAME = "sort";
         private static final String OUTPUT_ORDER_FULL_NAME = "assembled-contigs-output-order";
 
-        @Argument(doc = "sorting order to be used for the output assembly alignments SAM/BAM file",
+        @Argument(doc = "sorting order to be used for the output assembly alignments SAM/BAM file (currently only coordinate or query name is supported)",
                 shortName = OUTPUT_ORDER_SHORT_NAME,
                 fullName = OUTPUT_ORDER_FULL_NAME,
                 optional = true)
         public SAMFileHeader.SortOrder assembliesSortOrder = SAMFileHeader.SortOrder.coordinate;
+
+        @Argument(doc = "Path to xgboost classifier model file for evidence filtering",
+                fullName = "sv-evidence-filter-model-file", optional=true)
+        public String svEvidenceFilterModelFile = null;
+
+        @Argument(doc = "Path to single read 100-mer mappability file in the reference genome, used by classifier to score evidence for filtering. "
+                + "To use classifier without specifying mappability file, pass the flag --run-without-umap-s100-annotation",
+                fullName = "sv-genome-umap-s100-file", optional = true)
+        public String svGenomeUmapS100File = null;
+
+        @Argument(doc = "Path to file enumerating gaps in the reference genome, used by classifier to score evidence for filtering. "
+                + "To use classifier without specifying gaps file, pass the flag --run-without-gaps-annotation",
+                fullName = "sv-genome-gaps-file", optional = true)
+        public String svGenomeGapsFile = null;
+
+        /**
+         * Explicit call this method.
+         */
+        public void validate() {
+            ParamUtils.isPositive(kSize, "invalid value provided to kSize: " + kSize);
+            ParamUtils.isPositive(maxDUSTScore, "invalid value provided to maxDUSTScore: " + maxDUSTScore);
+            ParamUtils.isPositiveOrZero(minEvidenceMapQ, "invalid value provided to minEvidenceMapQ: " + minEvidenceMapQ);
+            ParamUtils.isPositive(minEvidenceMatchLength, "invalid value provided to minEvidenceMatchLength: " + minEvidenceMatchLength);
+            ParamUtils.isPositiveOrZero(allowedShortFragmentOverhang, "invalid value provided to allowedShortFragmentOverhang: " + allowedShortFragmentOverhang);
+            ParamUtils.isPositive(maxTrackedFragmentLength, "invalid value provided to maxTrackedFragmentLength: " + maxTrackedFragmentLength);
+            ParamUtils.isPositive(highDepthCoveragePeakFactor, "invalid value provided to highDepthCoveragePeakFactor: " + highDepthCoveragePeakFactor);
+            ParamUtils.isPositive(minEvidenceWeightPerCoverage, "invalid value provided to minEvidenceWeightPerCoverage: " + minEvidenceWeightPerCoverage);
+            ParamUtils.isPositive(minCoherentEvidenceWeightPerCoverage, "invalid value provided to minCoherentEvidenceWeightPerCoverage: " + minCoherentEvidenceWeightPerCoverage);
+            ParamUtils.isPositive(minKmersPerInterval, "invalid value provided to minKmersPerInterval: " + minKmersPerInterval);
+            ParamUtils.isPositive(cleanerMaxIntervals, "invalid value provided to cleanerMaxIntervals: " + cleanerMaxIntervals);
+            ParamUtils.isPositive(cleanerMinKmerCount, "invalid value provided to cleanerMinKmerCount: " + cleanerMinKmerCount);
+            ParamUtils.isPositive(cleanerMaxCopyNumber, "invalid value provided to cleanerMaxCopyNumber: " + cleanerMaxCopyNumber);
+            ParamUtils.isPositive(assemblyToMappedSizeRatioGuess, "invalid value provided to assemblyToMappedSizeRatioGuess: " + assemblyToMappedSizeRatioGuess);
+            ParamUtils.isPositive(maxFASTQSize, "invalid value provided to maxFASTQSize: " + maxFASTQSize);
+            ParamUtils.isPositiveOrZero(exclusionIntervalPadding, "invalid value provided to exclusionIntervalPadding: " + exclusionIntervalPadding);
+            ParamUtils.isPositive(externalEvidenceWeight, "invalid value provided to externalEvidenceWeight: " + externalEvidenceWeight);
+            ParamUtils.isPositive(externalEvidenceUncertainty, "invalid value provided to externalEvidenceUncertainty: " + externalEvidenceUncertainty);
+            if ( !(assembliesSortOrder.equals(SAMFileHeader.SortOrder.coordinate)
+                    ||
+                    assembliesSortOrder.equals(SAMFileHeader.SortOrder.queryname)) )
+                throw new UserException("We currently support only coordinate or query name sort order for assembly alignment SAM output. " +
+                        "User provided sort order: " + assembliesSortOrder);
+        }
     }
 
-    public static class DiscoverVariantsFromContigsAlignmentsSparkArgumentCollection implements Serializable {
+    public enum SvEvidenceFilterType {DENSITY, XGBOOST}
+
+    public static class DiscoverVariantsFromContigAlignmentsSparkArgumentCollection implements Serializable {
         private static final long serialVersionUID = 1L;
 
-        public static final int GAPPED_ALIGNMENT_BREAK_DEFAULT_SENSITIVITY = 50; // alignment with gap of size >= 50 will be broken apart.
+        public static final int GAPPED_ALIGNMENT_BREAK_DEFAULT_SENSITIVITY = STRUCTURAL_VARIANT_SIZE_LOWER_BOUND; // alignment with gap of size >= 50 will be broken apart.
+
+        // TODO: 7/30/18 the following two values essentially perform the same filtering, except one (CHIMERIC_ALIGNMENTS_HIGHMQ_THRESHOLD) is used in a tool (ContigChimericAlignmentIterativeInterpreter) that is about to be phased out, so move it when the kill switch is flipped
         public static final int CHIMERIC_ALIGNMENTS_HIGHMQ_THRESHOLD = 60;
+        public static final int ASSEMBLY_ALIGNMENT_MQ_FILTER_DEFAULT = 30;
+
         public static final int DEFAULT_MIN_ALIGNMENT_LENGTH = 50; // Minimum flanking alignment length filters used when going through contig alignments.
         public static final int DEFAULT_ASSEMBLED_IMPRECISE_EVIDENCE_OVERLAP_UNCERTAINTY = 100;
         public static final int DEFAULT_IMPRECISE_VARIANT_EVIDENCE_THRESHOLD = 7;
@@ -209,6 +286,9 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
 
         @Argument(doc = "Minimum flanking alignment length", fullName = "min-align-length")
         public Integer minAlignLength = DEFAULT_MIN_ALIGNMENT_LENGTH;
+
+        @Argument(doc = "Minimum mapping quality of evidence assembly contig", shortName = "mq", fullName = "min-mq")
+        public Integer minMQ = ASSEMBLY_ALIGNMENT_MQ_FILTER_DEFAULT;
 
         @Hidden
         @Argument(doc = "VCF containing the true breakpoints used only for evaluation (not generation) of calls",
@@ -236,10 +316,18 @@ public class StructuralVariationDiscoveryArgumentCollection implements Serializa
         public int maxCallableImpreciseVariantDeletionSize = DEFAULT_MAX_CALLABLE_IMPRECISE_DELETION_SIZE;
 
         @Advanced
-        @Hidden
-        @Argument(doc = "output cpx variants in a format that is more human friendly, primarily for debugging purposes",
-                fullName = "cpx-for-human-eye", optional = true)
-        public boolean outputCpxResultsInHumanReadableFormat = false;
-    }
+        @Argument(doc = "Run interpretation tool in debug mode (more information print to screen)", fullName = "debug-mode", optional = true)
+        public Boolean runInDebugMode = false;
 
+        /**
+         * Explicit call this method.
+         */
+        public void validate() {
+            ParamUtils.isPositive(minAlignLength, "invalid value provided to minAlignLength: " + minAlignLength);
+            ParamUtils.isPositive(assemblyImpreciseEvidenceOverlapUncertainty, "invalid value provided to assemblyImpreciseEvidenceOverlapUncertainty: " + assemblyImpreciseEvidenceOverlapUncertainty);
+            ParamUtils.isPositive(impreciseVariantEvidenceThreshold, "invalid value provided to impreciseVariantEvidenceThreshold: " + impreciseVariantEvidenceThreshold);
+            ParamUtils.isPositive(truthIntervalPadding, "invalid value provided to truthIntervalPadding: " + truthIntervalPadding);
+            ParamUtils.isPositive(maxCallableImpreciseVariantDeletionSize, "invalid value provided to maxCallableImpreciseVariantDeletionSize: " + maxCallableImpreciseVariantDeletionSize);
+        }
+    }
 }

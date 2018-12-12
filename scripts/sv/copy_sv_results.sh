@@ -38,10 +38,12 @@ COPY_FASTQ=${COPY_FASTQ:-"Y"}
 shift $(($# < 6 ? $# : 6))
 SV_ARGS=${*:-${SV_ARGS:-""}}
 
+GCS_SAVE_PATH=${GCS_SAVE_PATH%/} # remove trailing slash to avoid double slashes
+
 # get appropriate ZONE for cluster
 echo "CLUSTER_INFO=\$(gcloud dataproc clusters list --project=${PROJECT_NAME} --filter='clusterName=${CLUSTER_NAME}')"
-CLUSTER_INFO=$(gcloud dataproc clusters list --project=${PROJECT_NAME} --filter="clusterName=${CLUSTER_NAME}")
-ZONE=$(echo "${CLUSTER_INFO}" | awk 'NR==1 { for (i=1; i<=NF; i++) { f[$i] = i } } { print $(f["ZONE"]) }' | tail -1)
+CLUSTER_INFO=$(gcloud dataproc clusters list --project=${PROJECT_NAME} --filter="clusterName=${CLUSTER_NAME}" --format="csv(NAME, WORKER_COUNT, PREEMPTIBLE_WORKER_COUNT, STATUS, ZONE)")
+ZONE=$(echo "${CLUSTER_INFO}" | tail -1 | cut -d"," -f 5)
 echo "Zone = $ZONE"
 if [ -z "${ZONE}" ]; then
     # cluster is down.
@@ -62,17 +64,21 @@ if [ -z "${RESULTS_DIR}" ]; then
     echo "RESULTS_DIR=${RESULTS_DIR}" 2>&1 | tee -a ${LOCAL_LOG_FILE}
     GCS_RESULTS_DIR="${GCS_SAVE_PATH}/${RESULTS_DIR}"
     if [[ "${GCS_RESULTS_DIR}" != gs://* ]]; then GCS_RESULTS_DIR="gs://${GCS_RESULTS_DIR}"; fi
+    echo "Saving results to bucket ${GCS_RESULTS_DIR}"
 else
     # copy the latest results to google cloud
     echo "RESULTS_DIR=${RESULTS_DIR}" 2>&1 | tee -a ${LOCAL_LOG_FILE}
     GCS_RESULTS_DIR="${GCS_SAVE_PATH}/${RESULTS_DIR}"
     if [[ "${GCS_RESULTS_DIR}" != gs://* ]]; then GCS_RESULTS_DIR="gs://${GCS_RESULTS_DIR}"; fi
+    echo "Saving results to bucket ${GCS_RESULTS_DIR}"
     # chose semi-optimal parallel args for distcp
     # 1) count number of files to copy
     COUNT_FILES_CMD="hadoop fs -count /${RESULTS_DIR}/ | tr -s ' ' | cut -d ' ' -f 3"
     NUM_FILES=$(gcloud compute ssh ${MASTER} --zone ${ZONE} --project ${PROJECT_NAME} --command="${COUNT_FILES_CMD}")
     # 2) get the number of instances
-    NUM_INSTANCES=$(echo "${CLUSTER_INFO}" | awk 'NR==1 { for (i=1; i<=NF; i++) { f[$i] = i } } { print $(f["WORKER_COUNT"]) + $(f["PREEMPTIBLE_WORKER_COUNT"]) }' | tail -1)
+    NUM_WORKERS=$(echo "${CLUSTER_INFO}" | tail -1 | cut -d"," -f 2)
+    NUM_PREEMPTIBLE_WORKERS=$(echo "${CLUSTER_INFO}" | tail -1 | cut -d"," -f 3)
+    NUM_INSTANCES=`echo "${NUM_WORKERS} + ${NUM_PREEMPTIBLE_WORKERS:-0}" | bc`
     echo "Num Instances: $NUM_INSTANCES"
     # 3) choose number of maps as min of NUM_FILES or NUM_INSTANCES * MAPS_PER_INSTANCE
     MAPS_PER_INSTANCE=10

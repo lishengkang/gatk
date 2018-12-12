@@ -1,10 +1,11 @@
 package org.broadinstitute.hellbender.tools.walkers.haplotypecaller;
 
+import com.google.common.collect.ImmutableMap;
 import htsjdk.samtools.SamFiles;
 import htsjdk.tribble.Tribble;
 import htsjdk.variant.variantcontext.Allele;
 import htsjdk.variant.variantcontext.Genotype;
-import htsjdk.variant.variantcontext.GenotypesContext;
+import htsjdk.variant.variantcontext.GenotypeBuilder;
 import htsjdk.variant.variantcontext.VariantContext;
 import htsjdk.variant.vcf.VCFConstants;
 import htsjdk.variant.vcf.VCFHeader;
@@ -16,13 +17,17 @@ import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.engine.FeatureDataSource;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
 import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.VariantContextTestUtils;
 import org.broadinstitute.hellbender.tools.walkers.genotyper.AlleleSubsettingUtils;
+import org.broadinstitute.hellbender.tools.walkers.genotyper.GenotypeCalculationArgumentCollection;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.Utils;
+import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
+import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
-import org.broadinstitute.hellbender.utils.test.VariantContextTestUtils;
+import org.broadinstitute.hellbender.utils.variant.GATKVCFConstants;
 import org.broadinstitute.hellbender.utils.variant.HomoSapiensConstants;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
@@ -30,13 +35,29 @@ import org.testng.annotations.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+@Test(groups = {"variantcalling"})
 public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
 
+    // If true, update the expected outputs in tests that assert an exact match vs. prior output,
+    // instead of actually running the tests. Can be used with "./gradlew test -Dtest.single=HaplotypeCallerIntegrationTest"
+    // to update all of the exact-match tests at once. After you do this, you should look at the
+    // diffs in the new expected outputs in git to confirm that they are consistent with expectations.
+    public static final boolean UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS = false;
+
     public static final String TEST_FILES_DIR = toolsTestDir + "haplotypecaller/";
+
+    /*
+     * Make sure that someone didn't leave the UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS toggle turned on
+     */
+    @Test
+    public void assertThatExpectedOutputUpdateToggleIsDisabled() {
+        Assert.assertFalse(UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS, "The toggle to update expected outputs should not be left enabled");
+    }
 
     @DataProvider(name="HaplotypeCallerTestInputs")
     public Object[][] getHaplotypCallerTestInputs() {
@@ -55,11 +76,13 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("testVCFModeIsConsistentWithPastResults", ".vcf");
         final File expected = new File(TEST_FILES_DIR, "expected.testVCFMode.gatk4.vcf");
 
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
         final String[] args = {
                 "-I", inputFileName,
                 "-R", referenceFileName,
                 "-L", "20:10000000-10100000",
-                "-O", output.getAbsolutePath(),
+                "-O", outputPath,
                 "-pairHMM", "AVX_LOGLESS_CACHING",
                 "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
         };
@@ -67,7 +90,9 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         runCommandLine(args);
 
         // Test for an exact match against past results
-        IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
     }
 
     /*
@@ -84,11 +109,13 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("testVCFModeIsConsistentWithPastResults", ".vcf");
         final File expected = new File(TEST_FILES_DIR + "expected.testVCFMode.gatk4.alleleSpecific.vcf");
 
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
         final String[] args = {
                 "-I", inputFileName,
                 "-R", referenceFileName,
                 "-L", "20:10000000-10100000",
-                "-O", output.getAbsolutePath(),
+                "-O", outputPath,
                 "-G", "StandardAnnotation",
                 "-G", "StandardHCAnnotation",
                 "-G", "AS_StandardAnnotation",
@@ -99,7 +126,9 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         runCommandLine(args);
 
         // Test for an exact match against past results
-        IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
     }
 
     /*
@@ -180,11 +209,13 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("testGVCFModeIsConsistentWithPastResults", ".g.vcf");
         final File expected = new File(TEST_FILES_DIR, "expected.testGVCFMode.gatk4.g.vcf");
 
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
         final String[] args = {
                 "-I", inputFileName,
                 "-R", referenceFileName,
                 "-L", "20:10000000-10100000",
-                "-O", output.getAbsolutePath(),
+                "-O", outputPath,
                 "-ERC", "GVCF",
                 "-pairHMM", "AVX_LOGLESS_CACHING",
                 "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
@@ -193,7 +224,9 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         runCommandLine(args);
 
         // Test for an exact match against past results
-        IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
     }
 
     /*
@@ -208,11 +241,13 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("testGVCFModeIsConsistentWithPastResults_AlleleSpecificAnnotations", ".g.vcf");
         final File expected = new File(TEST_FILES_DIR + "expected.testGVCFMode.gatk4.alleleSpecific.g.vcf");
 
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
         final String[] args = {
                 "-I", inputFileName,
                 "-R", referenceFileName,
                 "-L", "20:10000000-10100000",
-                "-O", output.getAbsolutePath(),
+                "-O", outputPath,
                 "-G", "StandardAnnotation",
                 "-G", "StandardHCAnnotation",
                 "-G", "AS_StandardAnnotation",
@@ -224,13 +259,15 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         runCommandLine(args);
 
         // Test for an exact match against past results
-        IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
     }
 
     /*
      * Test that in GVCF mode we're >= 99% concordant with GATK3 results
      */
-    @Test(dataProvider="HaplotypeCallerTestInputs")
+    @Test(dataProvider="HaplotypeCallerTestInputs", enabled=false) //disabled after reference confidence change in #5172
     public void testGVCFModeIsConcordantWithGATK3_8Results(final String inputFileName, final String referenceFileName) throws Exception {
         Utils.resetRandomGenerator();
 
@@ -259,7 +296,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         Assert.assertTrue(concordance >= 0.99, "Concordance with GATK 3.8 in GVCF mode is < 99% (" +  concordance + ")");
     }
 
-    @Test(dataProvider="HaplotypeCallerTestInputs")
+    @Test(dataProvider="HaplotypeCallerTestInputs", enabled=false) //disabled after reference confidence change in #5172
     public void testGVCFModeIsConcordantWithGATK3_8AlelleSpecificResults(final String inputFileName, final String referenceFileName) throws Exception {
         Utils.resetRandomGenerator();
         final File output = createTempFile("testGVCFModeIsConcordantWithGATK3_8AlelleSpecificResults", ".g.vcf");
@@ -292,17 +329,57 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
     }
 
     @Test
+    public void testGVCFModeGenotypePosteriors() throws Exception {
+        Utils.resetRandomGenerator();
+
+        final String inputFileName = NA12878_20_21_WGS_bam;
+        final String referenceFileName =b37_reference_20_21;
+
+        final File output = createTempFile("testGVCFModeIsConsistentWithPastResults", ".g.vcf");
+
+        final String[] args = {
+                "-I", inputFileName,
+                "-R", referenceFileName,
+                "-L", "20:10000000-10100000",
+                "-O", output.getAbsolutePath(),
+                "-ERC", "GVCF",
+                "--" + GenotypeCalculationArgumentCollection.SUPPORTING_CALLSET_LONG_NAME,
+                    largeFileTestDir + "1000G.phase3.broad.withGenotypes.chr20.10100000.vcf",
+                "--" + GenotypeCalculationArgumentCollection.NUM_REF_SAMPLES_LONG_NAME, "2500",
+                "-pairHMM", "AVX_LOGLESS_CACHING",
+                "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
+        };
+
+        runCommandLine(args);
+
+        Pair<VCFHeader, List<VariantContext>> results = VariantContextTestUtils.readEntireVCFIntoMemory(output.getAbsolutePath());
+
+        for (final VariantContext vc : results.getRight()) {
+            final Genotype g = vc.getGenotype(0);
+            Assert.assertTrue(g.hasExtendedAttribute(GATKVCFConstants.PHRED_SCALED_POSTERIORS_KEY));
+            if (isGVCFReferenceBlock(vc) ) {
+                Assert.assertTrue(!vc.hasAttribute(GATKVCFConstants.GENOTYPE_PRIOR_KEY));
+            }
+            else if (!vc.getAlternateAllele(0).equals(Allele.NON_REF_ALLELE)){      //there are some variants that don't have non-symbolic alts
+                Assert.assertTrue(vc.hasAttribute(GATKVCFConstants.GENOTYPE_PRIOR_KEY));
+            }
+        }
+    }
+
+    @Test
     public void testGenotypeGivenAllelesMode() throws IOException {
         Utils.resetRandomGenerator();
 
         final File output = createTempFile("testGenotypeGivenAllelesMode", ".vcf");
         final File expected = new File(TEST_FILES_DIR, "expected.testGenotypeGivenAllelesMode.gatk4.vcf");
 
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
         final String[] args = {
                 "-I", NA12878_20_21_WGS_bam,
                 "-R", b37_reference_20_21,
                 "-L", "20:10000000-10010000",
-                "-O", output.getAbsolutePath(),
+                "-O", outputPath,
                 "-pairHMM", "AVX_LOGLESS_CACHING",
                 "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false",
                 "--genotyping-mode", "GENOTYPE_GIVEN_ALLELES",
@@ -312,7 +389,9 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         runCommandLine(args);
 
         // Test for an exact match against past results
-        IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
     }
 
     @Test(expectedExceptions = CommandLineException.BadArgumentValue.class)
@@ -339,6 +418,18 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
 
     @Test
     public void testBamoutProducesReasonablySizedOutput() {
+        final Path bamOutput = createTempFile("testBamoutProducesReasonablySizedOutput", ".bam").toPath();
+        innerTestBamoutProducesReasonablySizedOutput(bamOutput);
+    }
+
+    @Test(groups={"bucket"})
+    public void testBamoutOnGcs() {
+        final Path bamOutput = BucketUtils.getPathOnGcs(BucketUtils.getTempFilePath(
+            getGCPTestStaging() + "testBamoutProducesReasonablySizedOutput", ".bam"));
+        innerTestBamoutProducesReasonablySizedOutput(bamOutput);
+    }
+
+    private void innerTestBamoutProducesReasonablySizedOutput(Path bamOutput) {
         Utils.resetRandomGenerator();
 
         // We will test that when running with -bamout over the testInterval, we produce
@@ -351,7 +442,6 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final int gatk3BamoutNumReads = 5170;
 
         final File vcfOutput = createTempFile("testBamoutProducesReasonablySizedOutput", ".vcf");
-        final File bamOutput = createTempFile("testBamoutProducesReasonablySizedOutput", ".bam");
 
         ArgumentsBuilder argBuilder = new ArgumentsBuilder();
 
@@ -359,12 +449,12 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         argBuilder.addReference(new File(b37_reference_20_21));
         argBuilder.addOutput(new File(vcfOutput.getAbsolutePath()));
         argBuilder.addArgument("L", testInterval);
-        argBuilder.addArgument(AssemblyBasedCallerArgumentCollection.BAM_OUTPUT_SHORT_NAME, bamOutput.getAbsolutePath());
+        argBuilder.addArgument(AssemblyBasedCallerArgumentCollection.BAM_OUTPUT_SHORT_NAME, bamOutput.toUri().toString());
         argBuilder.addArgument("pairHMM", "AVX_LOGLESS_CACHING");
 
         runCommandLine(argBuilder.getArgsArray());
 
-        try ( final ReadsDataSource bamOutReadsSource = new ReadsDataSource(bamOutput.toPath()) ) {
+        try ( final ReadsDataSource bamOutReadsSource = new ReadsDataSource(bamOutput) ) {
             int actualBamoutNumReads = 0;
             for ( final GATKRead read : bamOutReadsSource ) {
                 ++actualBamoutNumReads;
@@ -373,6 +463,32 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
             final int readCountDifference = Math.abs(actualBamoutNumReads - gatk3BamoutNumReads);
             Assert.assertTrue(((double)readCountDifference / gatk3BamoutNumReads) < 0.10,
                     "-bamout produced a bam with over 10% fewer/more reads than expected");
+        }
+    }
+
+
+    @Test
+    public void testSitesOnlyMode() {
+        Utils.resetRandomGenerator();
+        File out = createTempFile("GTStrippedOutput", "vcf");
+        final String[] args = {
+                "-I", NA12878_20_21_WGS_bam,
+                "-R", b37_reference_20_21,
+                "-L", "20:10000000-10010000",
+                "-O", out.getAbsolutePath(),
+                "-pairHMM", "AVX_LOGLESS_CACHING",
+                "--" + StandardArgumentDefinitions.SITES_ONLY_LONG_NAME,
+                "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
+        };
+
+        runCommandLine(args);
+
+        // Assert that the genotype field has been stripped from the file
+        Pair<VCFHeader, List<VariantContext>> results = VariantContextTestUtils.readEntireVCFIntoMemory(out.getAbsolutePath());
+
+        Assert.assertFalse(results.getLeft().hasGenotypingData());
+        for (VariantContext v: results.getRight()) {
+            Assert.assertFalse(v.hasGenotypes());
         }
     }
 
@@ -441,18 +557,22 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         final File output = createTempFile("testHaplotypeCallerRemoveAltAlleleBasedOnHaptypeScoresResults", ".vcf");
         final File expected = new File(TEST_FILES_DIR, "expected.testHaplotypeCallerRemoveAltAlleleBasedOnHaptypeScores.gatk4.vcf");
 
+        final String outputPath = UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ? expected.getAbsolutePath() : output.getAbsolutePath();
+
         final String[] args = {
                 "-I", testBAM.getAbsolutePath(),
                 "-R", b37_reference_20_21,
                 "-L", "20:11363580-11363600",
-                "-O", output.getAbsolutePath(),
+                "-O", outputPath,
                 "-ploidy", "4",
                 "--max-genotype-count", "15",
                 "--" + StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false"
         };
         runCommandLine(args);
 
-        IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        if ( ! UPDATE_EXACT_MATCH_EXPECTED_OUTPUTS ) {
+            IntegrationTestSpec.assertEqualTextFiles(output, expected);
+        }
     }
 
     // test that ReadFilterLibrary.NON_ZERO_REFERENCE_LENGTH_ALIGNMENT removes reads that consume zero reference bases
@@ -593,13 +713,11 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
 
         // Expected calls from GATK 3.x on the contaminated bam running with -contamination
         // Created in GATK 3.8-1-1-gdde23f56a6 using the command:
-        // java -jar target/GenomeAnalysisTK.jar -T HaplotypeCaller -I ../hellbender/src/test/resources/large/contaminated_bams/CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.bam -R ../hellbender/src/test/resources/large/human_g1k_v37.20.21.fasta -L 20:10100000-10150000 -contamination 0.15 -o ../hellbender/src/test/resources/org/broadinstitute/hellbender/tools/haplotypecaller/expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.calls.20.10100000-10150000.gatk3.8-1-1-gdde23f56a6.vcf
-        final String expectedGATK3ContaminationCorrectedCallsVCF = TEST_FILES_DIR + "expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.calls.20.10100000-10150000.gatk3.8-1-1-gdde23f56a6.vcf";
+        // java -jar target/GenomeAnalysisTK.jar -T HaplotypeCaller -I ../hellbender/src/test/resources/large/contaminated_bams/CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.bam -R ../hellbender/src/test/resources/large/human_g1k_v37.20.21.fasta -L 20:10100000-10150000 -contamination 0.15 -o ../hellbender/src/test/resources/org/broadinstitute/hellbender/tools/haplotypecaller/expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.15PCT.20.10100000-10150000.gatk3.8-1-1-gdde23f56a6.vcf
+        final String expectedGATK3ContaminationCorrectedCallsVCF = TEST_FILES_DIR + "expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.15PCT.20.10100000-10150000.gatk3.8-1-1-gdde23f56a6.vcf";
 
-        // Expected calls from GATK 3.x on the contaminated bam running with -contamination
-        // Created in GATK 3.8-1-1-gdde23f56a6 using the command:
-        // java -jar target/GenomeAnalysisTK.jar -T HaplotypeCaller -I ../hellbender/src/test/resources/large/contaminated_bams/CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.bam -R ../hellbender/src/test/resources/large/human_g1k_v37.20.21.fasta -L 20:10100000-10150000 -contamination 0.15 -o ../hellbender/src/test/resources/org/broadinstitute/hellbender/tools/haplotypecaller/expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.calls.20.10100000-10150000.gatk3.8-1-1-gdde23f56a6.g.vcf -ERC GVCF
-        final String expectedGATK3ContaminationCorrectedCallsGVCF = TEST_FILES_DIR + "expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.calls.20.10100000-10150000.gatk3.8-1-1-gdde23f56a6.g.vcf";
+        // Expected calls from GATK ~4.0.8.1 with indel reference confidence fix
+        final String expectedGATK4ContaminationCorrectedCallsGVCF = TEST_FILES_DIR + "expected.CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.15PCT.20.10100000-10150000.postIndelRefConfUpdate.g.vcf";
 
         // Expected calls from GATK 4 on the uncontaminated bam (VCF mode)
         final String expectedGATK4UncontaminatedCallsVCF = TEST_FILES_DIR + "expected.CEUTrio.HiSeq.WGS.b37.NA12878.calls.20.10100000-10150000.vcf";
@@ -632,9 +750,101 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
                   b37_reference_20_21,
                   true, // GVCF mode
                   expectedGATK4UncontaminatedCallsGVCF,
-                  expectedGATK3ContaminationCorrectedCallsGVCF
+                  expectedGATK4ContaminationCorrectedCallsGVCF
                 }
         };
+    }
+
+    @Test
+    public void testMnpsAreRepresentedAsSingleEvents() {
+        final String bam = largeFileTestDir + "contaminated_bams/CEUTrio.HiSeq.WGS.b37.NA12878.CONTAMINATED.WITH.HCC1143.NORMALS.AT.15PERCENT.bam";
+        final File outputVcf = createTempFile("output", ".vcf");
+        final String[] args = {
+                "-I", bam,
+                "-R", b37_reference_20_21,
+                "-L", "20:10100000-10150000",
+                "-O", outputVcf.getAbsolutePath(),
+                "--" + HaplotypeCallerArgumentCollection.MAX_MNP_DISTANCE_LONG_NAME, "1"
+        };
+        Utils.resetRandomGenerator();
+        runCommandLine(args);
+
+        final Map<Integer, Allele> altAllelesByPosition = VariantContextTestUtils.streamVcf(outputVcf)
+                .collect(Collectors.toMap(VariantContext::getStart, vc -> vc.getAlternateAllele(0)));
+
+        final Map<Integer, Allele> expectedMnps = ImmutableMap.of(
+                10102247, Allele.create("AC", false),
+                10102530, Allele.create("TG", false),
+                10103849, Allele.create("CA", false));
+
+        expectedMnps.entrySet().forEach(entry -> {
+            final int position = entry.getKey();
+            Assert.assertEquals(altAllelesByPosition.get(position), entry.getValue());
+        });
+    }
+
+    // test on an artificial bam with several contrived MNPs
+    // this test is basically identical to a test in {@ link Mutect2IntegrationTest}
+    @Test
+    public void testMnps() throws Exception {
+        Utils.resetRandomGenerator();
+        final File bam = new File(toolsTestDir, "mnp.bam");
+
+        for (final int maxMnpDistance : new int[] {0, 1, 2, 3, 5}) {
+            final File outputVcf = createTempFile("unfiltered", ".vcf");
+
+            final List<String> args = Arrays.asList("-I", bam.getAbsolutePath(),
+                    "-R", b37_reference_20_21,
+                    "-L", "20:10019000-10022000",
+                    "-O", outputVcf.getAbsolutePath(),
+                    "-" + HaplotypeCallerArgumentCollection.MAX_MNP_DISTANCE_SHORT_NAME, Integer.toString(maxMnpDistance));
+            runCommandLine(args);
+
+            checkMnpOutput(maxMnpDistance, outputVcf);
+        }
+    }
+
+    // this is particular to our particular artificial MNP bam -- we extract a method in order to use it for HaplotypeCaller
+    private static void checkMnpOutput(int maxMnpDistance, File outputVcf) {
+        // note that for testing HaplotypeCaller GVCF mode we will always have the symbolic <NON REF> allele
+        final Map<Integer, List<String>> alleles = VariantContextTestUtils.streamVcf(outputVcf)
+                .collect(Collectors.toMap(VariantContext::getStart, vc -> vc.getAlternateAlleles().stream().filter(a -> !a.isSymbolic()).map(Allele::getBaseString).collect(Collectors.toList())));
+
+        // phased, two bases apart
+        if (maxMnpDistance < 2) {
+            Assert.assertEquals(alleles.get(10019968), Arrays.asList("G"));
+            Assert.assertEquals(alleles.get(10019970), Arrays.asList("G"));
+        } else {
+            Assert.assertEquals(alleles.get(10019968), Arrays.asList("GAG"));
+            Assert.assertTrue(!alleles.containsKey(10019970));
+        }
+
+        // adjacent and out of phase
+        Assert.assertEquals(alleles.get(10020229), Arrays.asList("A"));
+        Assert.assertEquals(alleles.get(10020230), Arrays.asList("G"));
+
+        // 4-substitution MNP w/ spacings 2, 3, 4
+        if (maxMnpDistance < 2) {
+            Assert.assertEquals(alleles.get(10020430), Arrays.asList("G"));
+            Assert.assertEquals(alleles.get(10020432), Arrays.asList("G"));
+            Assert.assertEquals(alleles.get(10020435), Arrays.asList("G"));
+            Assert.assertEquals(alleles.get(10020439), Arrays.asList("G"));
+        } else if (maxMnpDistance < 3) {
+            Assert.assertEquals(alleles.get(10020430), Arrays.asList("GAG"));
+            Assert.assertEquals(alleles.get(10020435), Arrays.asList("G"));
+            Assert.assertEquals(alleles.get(10020439), Arrays.asList("G"));
+        } else if (maxMnpDistance < 4) {
+            Assert.assertEquals(alleles.get(10020430), Arrays.asList("GAGTTG"));
+            Assert.assertEquals(alleles.get(10020439), Arrays.asList("G"));
+        } else {
+            Assert.assertEquals(alleles.get(10020430), Arrays.asList("GAGTTGTCTG"));
+        }
+
+        // two out of phase DNPs that overlap and have a base in common
+        if (maxMnpDistance > 0) {
+            Assert.assertEquals(alleles.get(10020680), Arrays.asList("TA"));
+            Assert.assertEquals(alleles.get(10020681), Arrays.asList("AT"));
+        }
     }
 
     @Test(dataProvider = "getContaminationCorrectionTestData")
@@ -645,18 +855,21 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
                                    final String reference,
                                    final boolean gvcfMode,
                                    final String gatk4UncontaminatedCallsVCF,
-                                   final String gatk3ContaminationCorrectedCallsVCF ) throws Exception {
+                                   final String expectedContaminationCorrectedCallsVCF ) throws Exception {
         final File uncorrectedOutput = createTempFile("testContaminationCorrectionUncorrectedOutput", gvcfMode ? ".g.vcf" : ".vcf");
         final File correctedOutput = createTempFile("testContaminationCorrectionCorrectedOutput", gvcfMode ? ".g.vcf" : ".vcf");
         final File correctedOutputUsingContaminationFile = createTempFile("testContaminationCorrectionCorrectedOutputUsingContaminationFile", gvcfMode ? ".g.vcf" : ".vcf");
 
         // Generate raw uncorrected calls on the contaminated bam, for comparison purposes
+        // Note that there are a huge number of MNPs in this bam, and that in {@code gatk4UncontaminatedCallsVCF} and
+        // {@code expectedContaminationCorrectedCallsVCF} these are represented as independent consecutive SNPs
+        // Thus if we ever turn on MNPs by default, this will fail
         final String[] noContaminationCorrectionArgs = {
                 "-I", contaminatedBam,
                 "-R", reference,
                 "-L", interval.toString(),
                 "-O", uncorrectedOutput.getAbsolutePath(),
-                "-ERC", (gvcfMode ? "GVCF" : "NONE")
+                "-ERC", (gvcfMode ? "GVCF" : "NONE"),
         };
         Utils.resetRandomGenerator();
         runCommandLine(noContaminationCorrectionArgs);
@@ -668,7 +881,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
                 "-L", interval.toString(),
                 "-O", correctedOutput.getAbsolutePath(),
                 "-contamination", Double.toString(contaminationFraction),
-                "-ERC", (gvcfMode ? "GVCF" : "NONE")
+                "-ERC", (gvcfMode ? "GVCF" : "NONE"),
         };
         Utils.resetRandomGenerator();
         runCommandLine(contaminationCorrectionArgs);
@@ -680,7 +893,7 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
                 "-L", interval.toString(),
                 "-O", correctedOutputUsingContaminationFile.getAbsolutePath(),
                 "-contamination-file", contaminationFile,
-                "-ERC", (gvcfMode ? "GVCF" : "NONE")
+                "-ERC", (gvcfMode ? "GVCF" : "NONE"),
         };
         Utils.resetRandomGenerator();
         runCommandLine(contaminationCorrectionFromFileArgs);
@@ -693,14 +906,14 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
 
         // Calculate concordance vs. the contamination-corrected calls from GATK3. Here we count
         // all records in the output, including reference blocks.
-        final double correctedCallsVSGATK3CorrectedCallsConcordance = calculateConcordance(correctedOutput, new File(gatk3ContaminationCorrectedCallsVCF));
-        final double correctedCallsFromFileVSGATK3CorrectedCallsConcordance = calculateConcordance(correctedOutputUsingContaminationFile, new File(gatk3ContaminationCorrectedCallsVCF));
+        final double correctedCallsVSExpectedCorrectedCallsConcordance = calculateConcordance(correctedOutput, new File(expectedContaminationCorrectedCallsVCF));
+        final double correctedCallsFromFileVSExpectedCorrectedCallsConcordance = calculateConcordance(correctedOutputUsingContaminationFile, new File(expectedContaminationCorrectedCallsVCF));
 
         // Sanity checks: the concordance when running with -contamination should be the same as the
         // concordance when running with -contamination-file
         assertEqualsDoubleSmart(correctedCallsVSUncontaminatedCallsConcordance, correctedCallsFromFileVSUncontaminatedCallsConcordance, 0.001,
                 "concordance running with -contamination and -contamination-file should be identical, but wasn't");
-        assertEqualsDoubleSmart(correctedCallsVSGATK3CorrectedCallsConcordance, correctedCallsFromFileVSGATK3CorrectedCallsConcordance, 0.001,
+        assertEqualsDoubleSmart(correctedCallsVSExpectedCorrectedCallsConcordance, correctedCallsFromFileVSExpectedCorrectedCallsConcordance, 0.001,
                 "concordance running with -contamination and -contamination-file should be identical, but wasn't");
 
         // With -contamination correction on, concordance vs. the calls on the uncontaminated bam
@@ -717,12 +930,12 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
 
         // -contamination corrected output in GATK4 should have >= 99% concordance
         // vs. -contamination corrected output in GATK3
-        Assert.assertTrue(correctedCallsVSGATK3CorrectedCallsConcordance >= 0.99,
+        Assert.assertTrue(correctedCallsVSExpectedCorrectedCallsConcordance >= 0.99,
                 "output with -contamination correction should have >= 99% concordance with contamination-corrected calls from GATK3, but it didn't");
 
         // -contamination-file corrected output in GATK4 should have >= 99% concordance
         // vs. -contamination corrected output in GATK3
-        Assert.assertTrue(correctedCallsFromFileVSGATK3CorrectedCallsConcordance >= 0.99,
+        Assert.assertTrue(correctedCallsFromFileVSExpectedCorrectedCallsConcordance >= 0.99,
                 "output with -contamination-file correction should have >= 99% concordance with contamination-corrected calls from GATK3, but it didn't");
     }
 
@@ -909,7 +1122,9 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
         int concordant = 0;
         int discordant = 0;
 
-        try ( final FeatureDataSource<VariantContext> actualSource = new FeatureDataSource<>(actual);
+        // unzip to avoid https://github.com/broadinstitute/gatk/issues/4224
+        File actualUnzipped = IOUtils.gunzipToTempIfNeeded(actual);
+        try ( final FeatureDataSource<VariantContext> actualSource = new FeatureDataSource<>(actualUnzipped);
               final FeatureDataSource<VariantContext> expectedSource = new FeatureDataSource<>(expected) ) {
 
             for ( final VariantContext vc : actualSource ) {
@@ -944,8 +1159,12 @@ public class HaplotypeCallerIntegrationTest extends CommandLineProgramTest {
     }
 
     private static String keyForVariant( final VariantContext variant ) {
+        Genotype genotype = variant.getGenotype(0);
+        if (genotype.isPhased()) { // unphase it for comparisons, since we rely on comparing the genotype string below
+            genotype = new GenotypeBuilder(genotype).phased(false).make();
+        }
         return String.format("%s:%d-%d %s %s", variant.getContig(), variant.getStart(), variant.getEnd(),
-                variant.getAlleles(), variant.getGenotype(0).getGenotypeString(false));
+                variant.getAlleles(), genotype.getGenotypeString(false));
     }
 
     private static boolean isGVCFReferenceBlock( final VariantContext vc ) {

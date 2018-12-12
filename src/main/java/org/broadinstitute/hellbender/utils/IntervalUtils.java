@@ -4,7 +4,6 @@ import htsjdk.samtools.QueryInterval;
 import htsjdk.samtools.SAMFileHeader;
 import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.samtools.SAMSequenceRecord;
-import htsjdk.samtools.reference.ReferenceSequenceFile;
 import htsjdk.samtools.util.Interval;
 import htsjdk.samtools.util.IntervalList;
 import htsjdk.samtools.util.Locatable;
@@ -23,6 +22,7 @@ import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.fasta.CachingIndexedFastaSequenceFile;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.broadinstitute.hellbender.utils.nio.PathLineIterator;
+import org.broadinstitute.hellbender.utils.param.ParamUtils;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -270,7 +270,7 @@ public final class IntervalUtils {
                     "interval or an interval file instead.");
         }
         // If it's a Feature-containing file, convert it to a list of intervals
-        else if ( FeatureManager.isFeatureFile(new File(arg)) ) {
+        else if ( FeatureManager.isFeatureFile(IOUtils.getPath(arg)) ) {
             rawIntervals.addAll(featureFileToIntervals(parser, arg));
         }
         // If it's an interval file, add its contents to the raw interval list
@@ -307,12 +307,11 @@ public final class IntervalUtils {
      * Converts a Feature-containing file to a list of intervals
      *
      * @param parser GenomeLocParser for creating intervals
-     * @param featureFileName file containing Features to convert to intervals
+     * @param featureFile file containing Features to convert to intervals
      * @return a List of intervals corresponding to the locations of the Features in the provided file
      * @throws UserException.CouldNotReadInputFile if the provided file is not in a supported Feature file format
      */
-    public static List<GenomeLoc> featureFileToIntervals( final GenomeLocParser parser, final String featureFileName ) {
-        final File featureFile = new File(featureFileName);
+    public static List<GenomeLoc> featureFileToIntervals( final GenomeLocParser parser, final String featureFile ) {
 
         try ( final FeatureDataSource<? extends Feature> dataSource = new FeatureDataSource<>(featureFile) ) {
             final List<GenomeLoc> featureIntervals = new ArrayList<>();
@@ -528,8 +527,6 @@ public final class IntervalUtils {
      */
     public static boolean isIntervalFile(final String str, final boolean checkExists) {
         Utils.nonNull(str);
-        final Path path = IOUtils.getPath(str);
-
         boolean hasIntervalFileExtension = false;
         for ( final String extension : INTERVAL_FILE_EXTENSIONS ) {
             if ( str.toLowerCase().endsWith(extension) ) {
@@ -538,6 +535,7 @@ public final class IntervalUtils {
         }
 
         if ( hasIntervalFileExtension ) {
+            final Path path = IOUtils.getPath(str);
             if ( ! checkExists || Files.exists(path) ) {
                 return true;
             } else {
@@ -555,13 +553,15 @@ public final class IntervalUtils {
      * @return A map of contig names with their sizes.
      */
     public static Map<String, Integer> getContigSizes(final Path reference) {
-        final ReferenceSequenceFile referenceSequenceFile = createReference(reference);
-        final List<GenomeLoc> locs = GenomeLocSortedSet.createSetFromSequenceDictionary(referenceSequenceFile.getSequenceDictionary()).toList();
-        final Map<String, Integer> lengths = new LinkedHashMap<>();
-        for (final GenomeLoc loc: locs) {
-            lengths.put(loc.getContig(), loc.size());
+        try(final CachingIndexedFastaSequenceFile referenceSequenceFile = new CachingIndexedFastaSequenceFile(reference)) {
+            final List<GenomeLoc> locs = GenomeLocSortedSet.createSetFromSequenceDictionary(
+                    referenceSequenceFile.getSequenceDictionary()).toList();
+            final Map<String, Integer> lengths = new LinkedHashMap<>();
+            for (final GenomeLoc loc : locs) {
+                lengths.put(loc.getContig(), loc.size());
+            }
+            return lengths;
         }
-        return lengths;
     }
 
     /**
@@ -1000,10 +1000,6 @@ public final class IntervalUtils {
         }
 
         return intervalGroups;
-    }
-
-    private static ReferenceSequenceFile createReference(final Path fastaPath) {
-            return CachingIndexedFastaSequenceFile.checkAndCreate(fastaPath);
     }
 
     private static LinkedHashMap<String, List<GenomeLoc>> splitByContig(final List<GenomeLoc> sorted) {
@@ -1515,5 +1511,30 @@ public final class IntervalUtils {
      */
     public enum IntervalBreakpointType {
         START_BREAKPOINT, END_BREAKPOINT
+    }
+
+    /**
+     * Determine whether the two intervals specified overlap each other by at least the threshold proportion specified.
+     * This is a commutative operation.
+     *
+     * @param interval1 Never {@code null}
+     * @param interval2 Never {@code null}
+     * @param reciprocalOverlapThreshold proportion of the segments that must overlap.  Must be between 0.0 and 1.0 (inclusive).
+     * @return whether there is a reciprocal overlap exceeding the given threshold.  If reciprocalOverlapThreshold is 0,
+     * always returns true, even if intervals do not overlap.
+     */
+    public static boolean isReciprocalOverlap(final SimpleInterval interval1, final SimpleInterval interval2, final double reciprocalOverlapThreshold) {
+        Utils.nonNull(interval1);
+        Utils.nonNull(interval2);
+        ParamUtils.inRange(reciprocalOverlapThreshold, 0.0, 1.0, "Reciprocal threshold must be between 0.0 and 1.0.");
+
+        if (reciprocalOverlapThreshold == 0.) {
+            return true;
+        }
+
+        // This overlap check is required, since intersect call below requires that the intervals overlap.
+        return interval1.overlaps(interval2) &&
+                (interval1.intersect(interval2).size() >= (interval2.size() * reciprocalOverlapThreshold)) &&
+                (interval2.intersect(interval1).size() >= (interval1.size() * reciprocalOverlapThreshold));
     }
 }

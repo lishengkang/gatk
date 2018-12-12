@@ -5,7 +5,7 @@ import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.CigarUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.utils.test.ReadClipperTestUtils;
+import org.broadinstitute.hellbender.testutils.ReadClipperTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -380,7 +380,7 @@ public final class ReadClipperUnitTest extends GATKBaseTest {
     }
 
     @Test
-    public void testRevertEntirelySoftclippedReads() {
+    public void testRevertEntirelySoftClippedReads() {
         GATKRead read = ReadClipperTestUtils.makeReadFromCigar("2H1S3H");
         GATKRead clippedRead = ReadClipper.revertSoftClippedBases(read);
         Assert.assertEquals(clippedRead.getStart(), getSoftStart(read));

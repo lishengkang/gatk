@@ -376,7 +376,7 @@ public class SAMRecordToGATKReadAdapter implements GATKRead, Serializable {
     @Override
     public String getReadGroup() {
         // May return null
-        return (String)samRecord.getAttribute(SAMTagUtil.getSingleton().RG);
+        return (String)samRecord.getAttribute(SAMTag.RG.getBinaryTag());
     }
 
     @Override
@@ -424,10 +424,27 @@ public class SAMRecordToGATKReadAdapter implements GATKRead, Serializable {
     }
 
     @Override
+    public boolean isUnplaced() {
+        return samRecord.getReferenceName() == null || samRecord.getReferenceName().equals(SAMRecord.NO_ALIGNMENT_REFERENCE_NAME) ||
+                samRecord.getAlignmentStart() == SAMRecord.NO_ALIGNMENT_START;
+    }
+
+    @Override
     public void setIsUnmapped() {
         clearCachedValues();
 
         samRecord.setReadUnmappedFlag(true);
+    }
+
+
+    @Override
+    public void setIsUnplaced() {
+        clearCachedValues();
+
+        samRecord.setReadUnmappedFlag(true);
+        samRecord.setReferenceIndex(SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX);
+        samRecord.setAlignmentStart(SAMRecord.NO_ALIGNMENT_START);
+        samRecord.setMappingQuality(SAMRecord.NO_MAPPING_QUALITY);
     }
 
     @Override
@@ -440,6 +457,14 @@ public class SAMRecordToGATKReadAdapter implements GATKRead, Serializable {
     }
 
     @Override
+    public boolean mateIsUnplaced() {
+        Utils.validate(isPaired(), "Cannot get mate information for an unpaired read");
+
+        return samRecord.getMateReferenceName() == null || samRecord.getMateReferenceName().equals(SAMRecord.NO_ALIGNMENT_REFERENCE_NAME) ||
+                samRecord.getMateAlignmentStart() == SAMRecord.NO_ALIGNMENT_START;
+    }
+
+    @Override
     public void setMateIsUnmapped() {
         clearCachedValues();
 
@@ -448,6 +473,19 @@ public class SAMRecordToGATKReadAdapter implements GATKRead, Serializable {
 
         samRecord.setMateUnmappedFlag(true);
     }
+
+    @Override
+    public void setMateIsUnplaced() {
+        clearCachedValues();
+
+        // Calling this method has the side effect of marking the read as paired.
+        setIsPaired(true);
+
+        samRecord.setMateUnmappedFlag(true);
+        samRecord.setMateReferenceIndex(SAMRecord.NO_ALIGNMENT_REFERENCE_INDEX);
+        samRecord.setMateAlignmentStart(SAMRecord.NO_ALIGNMENT_START);
+    }
+
 
     @Override
     public boolean isReverseStrand() {
@@ -678,6 +716,13 @@ public class SAMRecordToGATKReadAdapter implements GATKRead, Serializable {
     }
 
     @Override
+    public void reverseComplement() {
+        clearCachedValues();
+
+        samRecord.reverseComplement(true);
+    }
+
+    @Override
     public SAMRecord convertToSAMRecord( final SAMFileHeader header ) {
         samRecord.setHeaderStrict(header);
         return samRecord;
@@ -716,5 +761,27 @@ public class SAMRecordToGATKReadAdapter implements GATKRead, Serializable {
         clearCachedValues();
 
         samRecord.setHeaderStrict(header);
+    }
+
+    /**
+     * This is used to access the transient attribute store in the underlying SAMRecord.
+     *
+     * NOTE: This is an advanced use case for SAMRecord and you should probably use setAttribute() instead
+     * @param key key whose value is to be retrived
+     */
+    public Object getTransientAttribute(Object key) {
+        return samRecord.getTransientAttribute(key);
+    }
+
+    /**
+     * This is used to access the transient attribute store in the underlying SAMRecord. This is used to store temporary
+     * attributes that will not be serialized and that do not trigger the SAMRecord to parse the attributes if they are not needed.
+     *
+     * NOTE: This is an advanced use case for SAMRecord and you should probably use setAttribute() instead
+     * @param key key under which the value will be stored
+     * @param value value to be keyed
+     */
+    public void setTransientAttribute(Object key, Object value) {
+        samRecord.setTransientAttribute(key, value);
     }
 }

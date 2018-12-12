@@ -1,12 +1,13 @@
 package org.broadinstitute.hellbender.engine.filters;
 
 import htsjdk.samtools.*;
+import org.broadinstitute.hellbender.tools.AddOriginalAlignmentTags;
 import org.broadinstitute.hellbender.utils.QualityUtils;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.read.ArtificialReadUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
 import org.broadinstitute.hellbender.utils.read.SAMRecordToGATKReadAdapter;
-import org.broadinstitute.hellbender.utils.test.ReadClipperTestUtils;
+import org.broadinstitute.hellbender.testutils.ReadClipperTestUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
@@ -801,6 +802,18 @@ public final class ReadFilterLibraryUnitTest {
         read.setIsSecondaryAlignment(true);
         Assert.assertFalse(ReadFilterLibrary.PRIMARY_LINE.test(read));
 
+    }
+
+    @Test
+    public void testChimericOAFilter() {
+        final GATKRead read = simpleGoodRead(createHeaderWithReadGroups());
+        read.setAttribute(AddOriginalAlignmentTags.OA_TAG_NAME, "*,0,*,*,0,0;");
+
+        Assert.assertTrue(ReadFilterLibrary.NON_CHIMERIC_ORIGINAL_ALIGNMENT_READ_FILTER.test(read));
+
+        read.setAttribute(AddOriginalAlignmentTags.MATE_CONTIG_TAG_NAME, "chrM");
+
+        Assert.assertFalse(ReadFilterLibrary.NON_CHIMERIC_ORIGINAL_ALIGNMENT_READ_FILTER.test(read));
     }
 
 }

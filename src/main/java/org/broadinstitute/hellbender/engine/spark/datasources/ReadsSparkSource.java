@@ -1,56 +1,39 @@
 package org.broadinstitute.hellbender.engine.spark.datasources;
 
-import com.google.common.collect.Iterators;
-import com.google.common.collect.PeekingIterator;
-import htsjdk.samtools.*;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileStatus;
-import org.apache.hadoop.fs.FileSystem;
+import htsjdk.samtools.SAMFileHeader;
+import htsjdk.samtools.SAMRecord;
+import htsjdk.samtools.ValidationStringency;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
-import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.apache.parquet.avro.AvroParquetInputFormat;
-import org.apache.spark.api.java.JavaPairRDD;
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.api.java.function.FlatMapFunction;
-import org.apache.spark.api.java.function.FlatMapFunction2;
 import org.apache.spark.broadcast.Broadcast;
 import org.bdgenomics.formats.avro.AlignmentRecord;
 import org.broadinstitute.hellbender.engine.ReadsDataSource;
 import org.broadinstitute.hellbender.engine.TraversalParameters;
-import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.exceptions.UserException;
 import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
-import org.broadinstitute.hellbender.utils.read.BDGAlignmentRecordToGATKReadAdapter;
-import org.broadinstitute.hellbender.utils.read.GATKRead;
-import org.broadinstitute.hellbender.utils.read.ReadConstants;
-import org.broadinstitute.hellbender.utils.read.SAMRecordToGATKReadAdapter;
+import org.broadinstitute.hellbender.utils.read.*;
 import org.broadinstitute.hellbender.utils.spark.SparkUtils;
-import org.seqdoop.hadoop_bam.AnySAMInputFormat;
-import org.seqdoop.hadoop_bam.BAMInputFormat;
-import org.seqdoop.hadoop_bam.CRAMInputFormat;
-import org.seqdoop.hadoop_bam.SAMRecordWritable;
-import org.seqdoop.hadoop_bam.util.SAMHeaderReader;
+import org.disq_bio.disq.HtsjdkReadsRdd;
+import org.disq_bio.disq.HtsjdkReadsRddStorage;
+import org.disq_bio.disq.HtsjdkReadsTraversalParameters;
 
-import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
+import java.util.Objects;
 
 /** Loads the reads from disk either serially (using samReaderFactory) or in parallel using Hadoop-BAM.
  * The parallel code is a modified version of the example writing code from Hadoop-BAM.
  */
 public final class ReadsSparkSource implements Serializable {
     private static final long serialVersionUID = 1L;
-    private static final String HADOOP_PART_PREFIX = "part-";
 
     private transient final JavaSparkContext ctx;
     private ValidationStringency validationStringency = ReadConstants.DEFAULT_READ_VALIDATION_STRINGENCY;
@@ -89,39 +72,30 @@ public final class ReadsSparkSource implements Serializable {
      * @return RDD of (SAMRecord-backed) GATKReads from the file.
      */
     public JavaRDD<GATKRead> getParallelReads(final String readFileName, final String referencePath, final TraversalParameters traversalParameters, final long splitSize) {
-        SAMFileHeader header = getHeader(readFileName, referencePath);
-
-        // use the Hadoop configuration attached to the Spark context to maintain cumulative settings
-        final Configuration conf = ctx.hadoopConfiguration();
-        if (splitSize > 0) {
-            conf.set("mapreduce.input.fileinputformat.split.maxsize", Long.toString(splitSize));
+        try {
+            String cramReferencePath = checkCramReference(ctx, readFileName, referencePath);
+            HtsjdkReadsTraversalParameters<SimpleInterval> tp = traversalParameters == null ? null :
+                    new HtsjdkReadsTraversalParameters<>(traversalParameters.getIntervalsForTraversal(), traversalParameters.traverseUnmappedReads());
+            HtsjdkReadsRdd htsjdkReadsRdd = HtsjdkReadsRddStorage.makeDefault(ctx)
+                    .splitSize((int) splitSize)
+                    .validationStringency(validationStringency)
+                    .referenceSourcePath(cramReferencePath)
+                    .read(readFileName, tp);
+            JavaRDD<GATKRead> reads = htsjdkReadsRdd.getReads()
+                    .map(read -> (GATKRead) SAMRecordToGATKReadAdapter.headerlessReadAdapter(read))
+                    .filter(Objects::nonNull);
+            return fixPartitionsIfQueryGrouped(ctx, htsjdkReadsRdd.getHeader(), reads);
+        } catch (IOException | IllegalArgumentException e) {
+            throw new UserException("Failed to load reads from " + readFileName + "\n Caused by:" + e.getMessage(), e);
         }
+    }
 
-        final JavaPairRDD<LongWritable, SAMRecordWritable> rdd2;
-
-        setHadoopBAMConfigurationProperties(readFileName, referencePath);
-
-        boolean isBam = IOUtils.isBamFileName(readFileName);
-        if (isBam) {
-            if (traversalParameters == null) {
-                BAMInputFormat.unsetTraversalParameters(conf);
-            } else {
-                BAMInputFormat.setTraversalParameters(conf, traversalParameters.getIntervalsForTraversal(), traversalParameters.traverseUnmappedReads());
-            }
+    private static JavaRDD<GATKRead> fixPartitionsIfQueryGrouped(JavaSparkContext ctx, SAMFileHeader header, JavaRDD<GATKRead> reads) {
+        if( ReadUtils.isReadNameGroupedBam(header)) {
+            return SparkUtils.putReadsWithTheSameNameInTheSamePartition(header, reads, ctx);
+        } else {
+            return reads;
         }
-
-        rdd2 = ctx.newAPIHadoopFile(
-                readFileName, AnySAMInputFormat.class, LongWritable.class, SAMRecordWritable.class,
-                conf);
-
-        JavaRDD<GATKRead> reads= rdd2.map(v1 -> {
-            SAMRecord sam = v1._2().get();
-            if (isBam || samRecordOverlaps(sam, traversalParameters)) { // don't check overlaps for BAM since it is done by input format
-                return (GATKRead) SAMRecordToGATKReadAdapter.headerlessReadAdapter(sam);
-            }
-            return null;
-        }).filter(v1 -> v1 != null);
-        return putPairsInSamePartition(header, reads);
     }
 
     /**
@@ -168,7 +142,8 @@ public final class ReadsSparkSource implements Serializable {
                 .values();
         JavaRDD<GATKRead> readsRdd = recordsRdd.map(record -> new BDGAlignmentRecordToGATKReadAdapter(record, bHeader.getValue()));
         JavaRDD<GATKRead> filteredRdd = readsRdd.filter(record -> samRecordOverlaps(record.convertToSAMRecord(header), traversalParameters));
-        return putPairsInSamePartition(header, filteredRdd);
+
+        return fixPartitionsIfQueryGrouped(ctx, header, filteredRdd);
     }
 
     /**
@@ -187,130 +162,36 @@ public final class ReadsSparkSource implements Serializable {
 
         // local file or HDFs case
         try {
-            Path path = new Path(filePath);
-            FileSystem fs = path.getFileSystem(ctx.hadoopConfiguration());
-            if (fs.isDirectory(path)) {
-                FileStatus[] bamFiles = fs.listStatus(path, new PathFilter() {
-                    private static final long serialVersionUID = 1L;
-                    @Override
-                    public boolean accept(Path path) {
-                        return path.getName().startsWith(HADOOP_PART_PREFIX);
-                    }
-                });
-                if (bamFiles.length == 0) {
-                    throw new UserException("No BAM files to load header from in: " + path);
-                }
-                path = bamFiles[0].getPath(); // Hadoop-BAM writes the same header to each shard, so use the first one
-            }
-            setHadoopBAMConfigurationProperties(filePath, referencePath);
-            return SAMHeaderReader.readSAMHeaderFrom(path, ctx.hadoopConfiguration());
+            String cramReferencePath = checkCramReference(ctx, filePath, referencePath);
+            return HtsjdkReadsRddStorage.makeDefault(ctx)
+                    .validationStringency(validationStringency)
+                    .referenceSourcePath(cramReferencePath)
+                    .read(filePath)
+                    .getHeader();
         } catch (IOException | IllegalArgumentException e) {
             throw new UserException("Failed to read bam header from " + filePath + "\n Caused by:" + e.getMessage(), e);
         }
     }
 
     /**
-     * Ensure reads in a pair fall in the same partition (input split), if the reads are queryname-sorted,
-     * so they are processed together. No shuffle is needed.
+     * Check that for CRAM the reference is set to a file that exists and is not 2bit.
+     * @return the <code>referencePath</code> or <code>null</code> if not CRAM
      */
-    JavaRDD<GATKRead> putPairsInSamePartition(final SAMFileHeader header, final JavaRDD<GATKRead> reads) {
-        if (!header.getSortOrder().equals(SAMFileHeader.SortOrder.queryname)) {
-            return reads;
-        }
-        int numPartitions = reads.getNumPartitions();
-        final String firstGroupInBam = reads.first().getName();
-        // Find the first group in each partition
-        List<List<GATKRead>> firstReadNamesInEachPartition = reads
-                .mapPartitions(it -> { PeekingIterator<GATKRead> current = Iterators.peekingIterator(it);
-                                List<GATKRead> firstGroup = new ArrayList<>(2);
-                                firstGroup.add(current.next());
-                                String name = firstGroup.get(0).getName();
-                                while (current.hasNext() && current.peek().getName().equals(name)) {
-                                    firstGroup.add(current.next());
-                                }
-                                return Iterators.singletonIterator(firstGroup);
-                                })
-                .collect();
-
-        // Checking for pathological cases (read name groups that span more than 2 partitions)
-        String groupName = null;
-        for (List<GATKRead> group : firstReadNamesInEachPartition) {
-            if (group!=null && !group.isEmpty()) {
-                // If a read spans multiple partitions we expect its name to show up multiple times and we don't expect this to work properly
-                if (groupName != null && group.get(0).getName().equals(groupName)) {
-                    throw new GATKException(String.format("The read name '%s' appeared across multiple partitions this could indicate there was a problem " +
-                            "with the sorting or that the rdd has too many partitions, check that the file is queryname sorted and consider decreasing the number of partitions", groupName));
-                }
-                groupName =  group.get(0).getName();
-            }
-        }
-
-        // Shift left, so that each partition will be joined with the first read group from the _next_ partition
-        List<List<GATKRead>> firstReadInNextPartition = new ArrayList<>(firstReadNamesInEachPartition.subList(1, numPartitions));
-        firstReadInNextPartition.add(null); // the last partition does not have any reads to add to it
-
-        // Join the reads with the first read from the _next_ partition, then filter out the first and/or last read if not in a pair
-        return reads.zipPartitions(ctx.parallelize(firstReadInNextPartition, numPartitions),
-                (FlatMapFunction2<Iterator<GATKRead>, Iterator<List<GATKRead>>, GATKRead>) (it1, it2) -> {
-            PeekingIterator<GATKRead> current = Iterators.peekingIterator(it1);
-            String firstName = current.peek().getName();
-            // Make sure we don't remove reads from the first partition
-            if (!firstGroupInBam.equals(firstName)) {
-                // skip the first read name group in the _current_ partition if it is the second in a pair since it will be handled in the previous partition
-                while (current.hasNext() && current.peek() != null && current.peek().getName().equals(firstName)) {
-                    current.next();
-                }
-            }
-            // append the first reads in the _next_ partition to the _current_ partition
-            PeekingIterator<List<GATKRead>> next = Iterators.peekingIterator(it2);
-            if (next.hasNext() && next.peek() != null) {
-                return Iterators.concat(current, next.peek().iterator());
-            }
-            return current;
-        });
-    }
-
-    /**
-     * Propagate any values that need to be passed to Hadoop-BAM through configuration properties:
-     *
-     *   - the validation stringency property is always set using the current value of the
-     *     validationStringency field
-     *   - if the input file is a CRAM file, the reference value will also be set, and must be a URI
-     *     which includes a scheme. if no scheme is provided a "file://" scheme will be used. for
-     *     non-CRAM input the reference may be null.
-     *   - if the input file is not CRAM, the reference property is *unset* to prevent Hadoop-BAM
-     *     from passing a stale value through to htsjdk when multiple read calls are made serially
-     *     with different inputs but the same Spark context
-     */
-    private void setHadoopBAMConfigurationProperties(final String inputName, final String referenceName) {
-        // use the Hadoop configuration attached to the Spark context to maintain cumulative settings
-        final Configuration conf = ctx.hadoopConfiguration();
-        conf.set(SAMHeaderReader.VALIDATION_STRINGENCY_PROPERTY, validationStringency.name());
-
-        if (!IOUtils.isCramFileName(inputName)) {
-            // only set the reference for CRAM input
-            conf.unset(CRAMInputFormat.REFERENCE_SOURCE_PATH_PROPERTY);
-        }
-        else {
-            if (null == referenceName) {
+    static String checkCramReference(final JavaSparkContext ctx, final String filePath, final String referencePath) {
+        if (IOUtils.isCramFileName(filePath)) {
+            if (referencePath == null) {
                 throw new UserException.MissingReference("A reference is required for CRAM input");
-            }
-            else {
-                if (ReferenceTwoBitSource.isTwoBit(referenceName)) { // htsjdk can't handle 2bit reference files
-                    throw new UserException("A 2bit file cannot be used as a CRAM file reference");
-                }
-                else { // Hadoop-BAM requires the reference to be a URI, including scheme
-                    final Path refPath = new Path(referenceName);
-                    if (!SparkUtils.pathExists(ctx, refPath)) {
-                        throw new UserException.MissingReference("The specified fasta file (" + referenceName + ") does not exist.");
-                    }
-                    final String referenceURI = null == refPath.toUri().getScheme() ?
-                            "file://" + new File(referenceName).getAbsolutePath() :
-                            referenceName;
-                    conf.set(CRAMInputFormat.REFERENCE_SOURCE_PATH_PROPERTY, referenceURI);
+            } else if (ReferenceTwoBitSparkSource.isTwoBit(referencePath)) { // htsjdk can't handle 2bit reference files
+                throw new UserException("A 2bit file cannot be used as a CRAM file reference");
+            } else {
+                final Path refPath = new Path(referencePath);
+                if (!SparkUtils.pathExists(ctx, refPath)) {
+                    throw new UserException.MissingReference("The specified fasta file (" + referencePath + ") does not exist.");
                 }
             }
+            return referencePath;
         }
+        return null;
     }
 
     /**

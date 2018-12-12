@@ -8,6 +8,7 @@ import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.Utils;
 import org.broadinstitute.hellbender.utils.iterators.ByteArrayIterator;
 
+import java.util.Arrays;
 import java.util.Iterator;
 
 /**
@@ -60,7 +61,7 @@ public final class ReferenceContext implements Iterable<Byte> {
      * empty arrays/iterators in response to queries.
      */
     public ReferenceContext() {
-        this(null, null);
+        this(null, null, 0, 0);
     }
 
     /**
@@ -89,6 +90,26 @@ public final class ReferenceContext implements Iterable<Byte> {
         this.dataSource = dataSource;
         this.cachedSequence = null;
         this.interval = interval;
+        setWindow(windowLeadingBases, windowTrailingBases);
+    }
+
+    /**
+     * Create a windowed ReferenceContext set up to lazily query the provided interval.
+     *
+     * Window is preserved from {@code thatReferenceContext}.
+     *
+     * @param thatContext An existing {@link ReferenceContext} on which to base this new one.
+     * @param interval our location on the reference (may be null if our location is unknown)
+     */
+    public ReferenceContext( final ReferenceContext thatContext, final SimpleInterval interval ) {
+        this.dataSource = thatContext.dataSource;
+        this.cachedSequence = null;
+        this.interval = interval;
+
+        // Determine the window:
+        final int windowLeadingBases = thatContext.numWindowLeadingBases();
+        final int windowTrailingBases = thatContext.numWindowTrailingBases();
+
         setWindow(windowLeadingBases, windowTrailingBases);
     }
 
@@ -360,10 +381,38 @@ public final class ReferenceContext implements Iterable<Byte> {
     }
 
     /**
+     * @param contig
+     * @return the length/end position of the contig
+     */
+    private int getContigLength(final String contig){
+        return dataSource.getSequenceDictionary().getSequence(contig).getSequenceLength();
+    }
+
+    /**
      * Get the base at the given locus.
      * @return The base at the given locus from the reference.
      */
     public byte getBase() {
         return getBases()[interval.getStart() - window.getStart()];
+    }
+
+    /**
+     * Get a kmer around a position in reference without altering the internal state of the object
+     * The position must lie within the window
+     *
+     * Returns null when, at the ends of a contig, we cannot expand the window to the requested size
+     */
+    public String getKmerAround(final int center, final int numBasesOnEachSide){
+        Utils.validateArg(center >= 1, () -> "start position must be positive");
+        Utils.validateArg(window.getStart() <= center && center <= window.getEnd(), "position must be smaller than end position");
+
+        final SimpleInterval newWindow = new SimpleInterval(window.getContig(), center, center)
+                .expandWithinContig(numBasesOnEachSide, getContigLength(window.getContig()));
+
+        if (newWindow.getEnd() - newWindow.getStart() < 2*numBasesOnEachSide){
+            return null;
+        }
+
+        return new String(getBases(newWindow));
     }
 }

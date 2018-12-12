@@ -23,6 +23,7 @@ import java.sql.*;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 
 /**
@@ -128,9 +129,17 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
     public CosmicFuncotationFactory(final Path pathToCosmicDb,
                                     final LinkedHashMap<String, String> annotationOverridesMap,
                                     final String version) {
-        this.pathToCosmicDb = pathToCosmicDb;
+        this(pathToCosmicDb, annotationOverridesMap, version, false);
+    }
 
+    public CosmicFuncotationFactory(final Path pathToCosmicDb,
+                                    final LinkedHashMap<String, String> annotationOverridesMap,
+                                    final String version,
+                                    final boolean isDataSourceB37) {
+
+        this.pathToCosmicDb = pathToCosmicDb;
         this.version = version;
+        this.dataSourceIsB37 = isDataSourceB37;
 
         // Connect to the DB:
         try {
@@ -164,7 +173,7 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
     // Override Methods:
 
     @Override
-    protected Class<? extends Feature> getAnnotationFeatureClass() {
+    public Class<? extends Feature> getAnnotationFeatureClass() {
         // Returning Feature.class here implies that this class doesn't care about what features it gets.
         return Feature.class;
     }
@@ -199,11 +208,11 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
         // Add our tally for all alternate alleles in this variant:
         for ( final Allele altAllele : variant.getAlternateAlleles() ) {
             funcotationList.add(
-                    new TableFuncotation(
+                    TableFuncotation.create(
                             new ArrayList<>(supportedFields),
-                            new ArrayList<>(Collections.singletonList(String.valueOf(0))),
+                            new ArrayList<>(Collections.singletonList("")),
                             altAllele,
-                            name
+                            name, null
                     )
             );
         }
@@ -227,8 +236,8 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
 
         final List<Funcotation> outputFuncotations = new ArrayList<>();
 
-        // Keep count of our overlapping mutations here:
-        int numOverlappingMutations = 0;
+        // Keep count of each overlapping mutation here:
+        final Map<String, Integer> proteinChangeCounts = new LinkedHashMap<>();
 
         // If we have gencodeFuncotations we go through them and get the gene name
         // Then query our DB for matches on the gene name.
@@ -252,27 +261,30 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
                     try ( final ResultSet resultSet = statement.executeQuery(RESULT_QUERY_TEMPLATE + "\"" + geneName + "\";") ) {
                         // iterate through our results:
                         while ( resultSet.next() ) {
-                            // Get the genome position and protein position:
+
+                            // Get the genome position:
                             final SimpleInterval cosmicGenomePosition = getGenomePositionFromResults(resultSet);
-                            final SimpleInterval cosmicProteinPosition = getProteinPositionFromResults(resultSet);
 
                             // Try to match on genome position first:
                             if ( cosmicGenomePosition != null ) {
-                                // If we overlap the records, we update the counter:
                                 if ( genomePosition.overlaps(cosmicGenomePosition) ) {
-                                    ++numOverlappingMutations;
+                                    // If we overlap the records, we get the protein change and add it to the map:
+                                    updateProteinChangeCountMap(proteinChangeCounts, resultSet);
                                     continue;
                                 }
                             }
+
+                            // Get the protein position:
+                            final SimpleInterval cosmicProteinPosition = getProteinPositionFromResults(resultSet);
 
                             // Now try to match on protein position:
                             if ( proteinPosition != null ) {
                                 // If we overlap the records, we update the counter:
                                 if ( proteinPosition.overlaps(cosmicProteinPosition) ) {
-                                    ++numOverlappingMutations;
+                                    updateProteinChangeCountMap(proteinChangeCounts, resultSet);
                                 }
                             }
-                            // NOTE: We can't annotate if the protein position and the genome position are null.
+                            // NOTE: We can't annotate if the protein position is null.
                         }
                     }
                 }
@@ -282,19 +294,29 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
             }
         }
 
-        // Add our tally for all alternate alleles in this variant:
+        // Add our counts to all alternate alleles in this variant:
         for ( final Allele altAllele : variant.getAlternateAlleles() ) {
             outputFuncotations.add(
-                    new TableFuncotation(
+                    TableFuncotation.create(
                             new ArrayList<>(supportedFields),
-                            new ArrayList<>(Collections.singletonList(String.valueOf(numOverlappingMutations))),
+                            Collections.singletonList(proteinChangeCounts.entrySet().stream()
+                                    .map(entry -> entry.getKey() + '('+ entry.getValue() + ')')
+                                    .collect(Collectors.joining("|"))),
                             altAllele,
-                            name
+                            name, null
                     )
             );
         }
 
         return outputFuncotations;
+    }
+
+    private void updateProteinChangeCountMap(final Map<String, Integer> proteinChangeCounts, final ResultSet resultSet) {
+        final String proteinChange = getProteinChangeStringFromResults(resultSet);
+        if ( !proteinChange.isEmpty() ) {
+            final int count = proteinChangeCounts.getOrDefault(proteinChange, 0);
+            proteinChangeCounts.put(proteinChange, count + 1);
+        }
     }
 
     @Override
@@ -332,7 +354,15 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
                 final int start = Integer.valueOf(matcher.group(2));
                 final int end = Integer.valueOf(matcher.group(3));
 
-                return new SimpleInterval(contig, start, end);
+                try {
+                    return new SimpleInterval(contig, start, end);
+                }
+                catch (final IllegalArgumentException ex) {
+                    // If we have poorly bounded genomic positions, we need to warn the user and move on.
+                    // These may occur occasionally in the data.
+                    logger.warn("Warning - unable to parse genome position string due to invalid position information.  Ignoring potential COSMIC match with genome position: " + rawPosition);
+                    return null;
+                }
             }
         }
         catch (final SQLException ex) {
@@ -347,15 +377,24 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
      * @param resultSet The results of a query on the database with a current row (must not be {@code null}).
      * @return A {@link SimpleInterval} representing the extents of the protein position in the current record in the given {@link ResultSet} or {@code null}.
      */
-    private final SimpleInterval getProteinPositionFromResults(final ResultSet resultSet) {
+    private SimpleInterval getProteinPositionFromResults(final ResultSet resultSet) {
+        return parseProteinString( getProteinChangeStringFromResults(resultSet) );
+    }
+
+    /**
+     * Pulls a protein change string out of the current record in the given {@link ResultSet}.
+     * @param resultSet The results of a query on the database with a current row (must not be {@code null}).
+     * @return A {@link String} representing the protein change as found in the current record of the given {@link ResultSet}.  Will not be {@code null}.
+     */
+    private String getProteinChangeStringFromResults(final ResultSet resultSet) {
         Utils.nonNull(resultSet);
 
         try {
-            final String rawPosition = resultSet.getString(PROTEIN_POSITION_COLUMN_NAME);
-            return parseProteinString(rawPosition);
+            final String proteinChangeString = resultSet.getString(PROTEIN_POSITION_COLUMN_NAME);
+            return proteinChangeString == null ? "" : proteinChangeString;
         }
         catch (final SQLException ex) {
-            throw new GATKException("Cannot get Protein Position from column: " + GENOME_POSITION_COLUMN_NAME, ex);
+            throw new GATKException("Cannot get protein change from column: " + GENOME_POSITION_COLUMN_NAME, ex);
         }
     }
 
@@ -364,21 +403,54 @@ public class CosmicFuncotationFactory extends DataSourceFuncotationFactory {
      * @param proteinPositionString A {@link String} representing a protein position / protein change.
      * @return A {@link SimpleInterval} representing the extents of the given {@code proteinPositionString} or {@code null}.
      */
-    private final SimpleInterval parseProteinString(final String proteinPositionString) {
+    private SimpleInterval parseProteinString(final String proteinPositionString) {
         Utils.nonNull(proteinPositionString);
 
         final Matcher matcher = PROTEIN_POSITION_REGEX.matcher(proteinPositionString);
         if ( matcher.matches() ) {
-            // We have a position, so we should parse it.
-            // If we have an end position, we should use it:
-            if ( matcher.group(2) != null ) {
-                return new SimpleInterval(PROTEIN_CONTIG, Integer.valueOf(matcher.group(1)), Integer.valueOf(matcher.group(2)));
+            try {
+
+                // We have a position, so we should parse it.
+                // If we have an end position, we should use it:
+                if ( matcher.group(2) != null ) {
+                    return new SimpleInterval(PROTEIN_CONTIG, Integer.valueOf(matcher.group(1)), Integer.valueOf(matcher.group(2)));
+                }
+                else {
+                    return new SimpleInterval(PROTEIN_CONTIG, Integer.valueOf(matcher.group(1)), Integer.valueOf(matcher.group(1)));
+                }
             }
-            else {
-                return new SimpleInterval(PROTEIN_CONTIG, Integer.valueOf(matcher.group(1)), Integer.valueOf(matcher.group(1)));
+            catch (final IllegalArgumentException ex) {
+                // If we have poorly bounded protein changes, we need to warn the user and move on.
+                // These occur occasionally in the data.
+                logger.warn("Warning - unable to parse protein string due to invalid position information.  Ignoring potential COSMIC match with protein sequence: " + proteinPositionString);
+                return null;
             }
         }
         return null;
+    }
+
+    /**
+     * Print the given {@link ResultSet} to stdout.
+     * @param resultSet The {@link ResultSet} to print.
+     */
+    private final void printResultSet(final ResultSet resultSet) {
+        try {
+            final ResultSetMetaData metadata    = resultSet.getMetaData();
+            final int               columnCount = metadata.getColumnCount();
+            for (int i = 1; i <= columnCount; i++) {
+                System.out.print(metadata.getColumnName(i) + ", ");
+            }
+            System.out.println();
+            while ( resultSet.next() ) {
+                for ( int i = 1; i <= columnCount; i++ ) {
+                    System.out.print(resultSet.getString(i) + ", ");
+                }
+                System.out.println();
+            }
+        }
+        catch (final SQLException ex) {
+            throw new GATKException("Cannot print resultSet!");
+        }
     }
 
     //==================================================================================================================

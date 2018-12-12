@@ -1,21 +1,23 @@
 package org.broadinstitute.hellbender.tools.walkers.mutect;
 
-import htsjdk.samtools.SAMSequenceDictionary;
 import htsjdk.variant.variantcontext.writer.VariantContextWriter;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.ArgumentCollection;
-import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
 import org.broadinstitute.hellbender.cmdline.programgroups.ShortVariantDiscoveryProgramGroup;
 import org.broadinstitute.hellbender.engine.*;
 import org.broadinstitute.hellbender.engine.filters.ReadFilter;
+import org.broadinstitute.hellbender.exceptions.UserException;
+import org.broadinstitute.hellbender.tools.walkers.annotator.*;
+import org.broadinstitute.hellbender.transformers.ReadTransformer;
 import org.broadinstitute.hellbender.utils.downsampling.MutectDownsampler;
 import org.broadinstitute.hellbender.utils.downsampling.ReadsDownsampler;
+import org.broadinstitute.hellbender.utils.read.ReadUtils;
 
 import java.io.File;
-import java.util.List;
+import java.util.*;
 
 /**
  * <p>Call somatic short variants via local assembly of haplotypes.
@@ -132,7 +134,7 @@ public final class Mutect2 extends AssemblyRegionWalker {
     private VariantContextWriter vcfWriter;
 
     private Mutect2Engine m2Engine;
-    
+
     @Override
     protected int defaultMinAssemblyRegionSize() { return 50; }
 
@@ -155,8 +157,21 @@ public final class Mutect2 extends AssemblyRegionWalker {
     protected boolean includeReadsWithDeletionsInIsActivePileups() { return true; }
 
     @Override
+    public boolean useVariantAnnotations() { return true;}
+
+    @Override
     public List<ReadFilter> getDefaultReadFilters() {
         return Mutect2Engine.makeStandardMutect2ReadFilters();
+    }
+
+    @Override
+    public ReadTransformer makePostReadFilterTransformer() {
+        return super.makePostReadFilterTransformer().andThen(Mutect2Engine.makeStandardMutect2PostFilterReadTransformer(referenceArguments.getReferencePath(), !MTAC.dontClipITRArtifacts));
+    }
+
+    @Override
+    public List<Class<? extends Annotation>> getDefaultVariantAnnotationGroups() {
+        return Mutect2Engine.getStandardMutect2AnnotationGroups();
     }
 
     @Override
@@ -168,11 +183,41 @@ public final class Mutect2 extends AssemblyRegionWalker {
     public AssemblyRegionEvaluator assemblyRegionEvaluator() { return m2Engine; }
 
     @Override
+    protected String[] customCommandLineValidation() {
+        if (MTAC.tumorSample == null && !MTAC.mitochondria) {
+            return new String[]{"Argument tumor-sample was missing: Argument 'tumor-sample' is required when not in mitochondria mode."};
+        }
+        return null;
+    }
+
+    @Override
     public void onTraversalStart() {
-        m2Engine = new Mutect2Engine(MTAC, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), referenceArguments.getReferenceFileName());
-        final SAMSequenceDictionary sequenceDictionary = getHeaderForReads().getSequenceDictionary();
+        if (MTAC.mitochondria) {
+            final Set<String> samples = ReadUtils.getSamplesFromHeader(getHeaderForReads());
+            if (samples.size() != 1) {
+                throw new UserException(String.format("The input bam has more than one sample: %s", Arrays.toString(samples.toArray())));
+            }
+            MTAC.tumorSample = samples.iterator().next();
+        }
+        VariantAnnotatorEngine annotatorEngine = new VariantAnnotatorEngine(makeVariantAnnotations(), null, Collections.emptyList(), false);
+        m2Engine = new Mutect2Engine(MTAC, createOutputBamIndex, createOutputBamMD5, getHeaderForReads(), referenceArguments.getReferenceFileName(), annotatorEngine);
         vcfWriter = createVCFWriter(outputVCF);
-        m2Engine.writeHeader(vcfWriter, sequenceDictionary, getDefaultToolVCFHeaderLines());
+        m2Engine.writeHeader(vcfWriter, getDefaultToolVCFHeaderLines());
+    }
+
+    @Override
+    public Collection<Annotation> makeVariantAnnotations(){
+        final Collection<Annotation> annotations = super.makeVariantAnnotations();
+
+        if (MTAC.artifactPriorTable != null){
+            // Enable the annotations associated with the read orientation model
+            annotations.add(new ReadOrientationArtifact(MTAC.artifactPriorTable));
+            annotations.add(new ReferenceBases());
+        }
+        if (MTAC.autosomalCoverage > 0) {
+            annotations.add(new PolymorphicNuMT(MTAC.autosomalCoverage));
+        }
+        return annotations;
     }
 
     @Override
@@ -187,11 +232,10 @@ public final class Mutect2 extends AssemblyRegionWalker {
 
     @Override
     public void closeTool() {
-        if ( vcfWriter != null ) {
+        if (vcfWriter != null) {
             vcfWriter.close();
         }
-
-        if ( m2Engine != null ) {
+        if (m2Engine != null) {
             m2Engine.shutdown();
         }
     }

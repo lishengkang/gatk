@@ -1,11 +1,14 @@
 package org.broadinstitute.hellbender.tools.funcotator.dataSources.gencode;
 
+import com.google.common.annotations.VisibleForTesting;
 import htsjdk.tribble.annotation.Strand;
 import htsjdk.variant.variantcontext.Allele;
 import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.tools.funcotator.metadata.FuncotationMetadataUtils;
 import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfFeature;
 import org.broadinstitute.hellbender.utils.codecs.gencode.GencodeGtfGeneFeature;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -20,7 +23,8 @@ public class GencodeFuncotationBuilder {
     /**
      * The {@link GencodeFuncotation} that is being populated by this {@link GencodeFuncotationBuilder}.
      */
-    private GencodeFuncotation gencodeFuncotation;
+    @VisibleForTesting
+    GencodeFuncotation gencodeFuncotation;
 
     //==================================================================================================================
 
@@ -28,7 +32,13 @@ public class GencodeFuncotationBuilder {
         gencodeFuncotation = new GencodeFuncotation();
     }
 
+    public GencodeFuncotationBuilder(final GencodeFuncotation gf) {
+        gencodeFuncotation = new GencodeFuncotation(gf);
+    }
+
     public GencodeFuncotation build() {
+        // TODO: In the future, we will need a mechanism for populating the metadata, especially if we want to support separate INFO fields in a VCF for each funcotation field (https://github.com/broadinstitute/gatk/issues/4857)
+        gencodeFuncotation.setMetadata(FuncotationMetadataUtils.createWithUnknownAttributes(new ArrayList<>(gencodeFuncotation.getFieldNames())));
         return gencodeFuncotation;
     }
 
@@ -150,12 +160,22 @@ public class GencodeFuncotationBuilder {
     }
 
     /**
-     * Set the position (1-based, inclusive) relative to the start of the transcript of a the variant in the {@link GencodeFuncotation}.
-     * @param transcriptPos The position (1-based, inclusive) relative to the start of the transcript of a the variant in the {@link GencodeFuncotation}.
+     * Set the start position (1-based, inclusive) relative to the start of the transcript of a the variant in the {@link GencodeFuncotation}.
+     * @param transcriptStartPos The start position (1-based, inclusive) of the variant in the {@link GencodeFuncotation} relative to the start of the transcript.
      * @return {@code this} {@link GencodeFuncotationBuilder}
      */
-    public GencodeFuncotationBuilder setTranscriptPos(final Integer transcriptPos) {
-        gencodeFuncotation.setTranscriptPos(transcriptPos);
+    public GencodeFuncotationBuilder setTranscriptStartPos(final Integer transcriptStartPos) {
+        gencodeFuncotation.setTranscriptStartPos(transcriptStartPos);
+        return this;
+    }
+
+    /**
+     * Set the end position (1-based, inclusive) relative to the start of the transcript of a the variant in the {@link GencodeFuncotation}.
+     * @param transcriptEndPos The end position (1-based, inclusive) of the variant in the {@link GencodeFuncotation} relative to the start of the transcript.
+     * @return {@code this} {@link GencodeFuncotationBuilder}
+     */
+    public GencodeFuncotationBuilder setTranscriptEndPos(final Integer transcriptEndPos) {
+        gencodeFuncotation.setTranscriptEndPos(transcriptEndPos);
         return this;
     }
 
@@ -271,6 +291,7 @@ public class GencodeFuncotationBuilder {
 
     /**
      * Set the Reference Context {@link String} in the {@link GencodeFuncotation}.
+     * The Reference Context string should always be for the bases on the + strand.
      * @param referenceContext The {@link String} containing the ReferenceContext for the {@link GencodeFuncotation}.
      * @return {@code this} {@link GencodeFuncotationBuilder}
      */
@@ -296,6 +317,16 @@ public class GencodeFuncotationBuilder {
      */
     public GencodeFuncotationBuilder setGeneTranscriptType(final GencodeGtfFeature.GeneTranscriptType geneTranscriptType) {
         gencodeFuncotation.setGeneTranscriptType( geneTranscriptType );
+        return this;
+    }
+
+    /**
+     * Set the Data Source Name {@link String} in the {@link GencodeFuncotation}.
+     * @param name The {@link String} containing the Data Source Name for the {@link GencodeFuncotation}.
+     * @return {@code this} {@link GencodeFuncotationBuilder}
+     */
+    public GencodeFuncotationBuilder setDataSourceName( final String name ) {
+        gencodeFuncotation.setDataSourceName( name );
         return this;
     }
  }

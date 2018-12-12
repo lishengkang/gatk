@@ -7,7 +7,6 @@ buildscript {
      }
 }
 
-
 plugins {
     id "java"           // set up default java compile and test tasks
     id "application"    // provides installDist
@@ -57,23 +56,26 @@ repositories {
 }
 
 final requiredJavaVersion = "8"
-final htsjdkVersion = System.getProperty('htsjdk.version','2.14.3')
-final picardVersion = System.getProperty('picard.version','2.18.2')
+final htsjdkVersion = System.getProperty('htsjdk.version','2.18.1')
+final picardVersion = System.getProperty('picard.version','2.18.16')
 final barclayVersion = System.getProperty('barclay.version','2.1.0')
 final sparkVersion = System.getProperty('spark.version', '2.2.0')
 final hadoopVersion = System.getProperty('hadoop.version', '2.8.2')
-final hadoopBamVersion = System.getProperty('hadoopBam.version','7.9.1')
-final genomicsdbVersion = System.getProperty('genomicsdb.version','0.9.2-proto-3.0.0-beta-1+uuid-static')
+final hadoopBamVersion = System.getProperty('hadoopBam.version','7.10.0')
+final tensorflowVersion = System.getProperty('tensorflow.version','1.9.0')
+final genomicsdbVersion = System.getProperty('genomicsdb.version','0.10.0-proto-3.0.0-beta-1+bdce8be25b873')
 final testNGVersion = '6.11'
 // Using the shaded version to avoid conflicts between its protobuf dependency
 // and that of Hadoop/Spark (either the one we reference explicitly, or the one
 // provided by dataproc).
-final googleCloudNioDependency = 'org.broadinstitute:google-cloud-nio-GATK4-custom-patch:0.20.4-alpha-GCS-RETRY-FIX:shaded'
+final googleCloudNioDependency = 'com.google.cloud:google-cloud-nio:0.62.0-alpha:shaded'
 
 final baseJarName = 'gatk'
 final secondaryBaseJarName = 'hellbender'
 final docBuildDir = "$buildDir/docs"
 final pythonPackageArchiveName = 'gatkPythonPackageArchive.zip'
+final gatkCondaTemplate = "gatkcondaenv.yml.template"
+final gatkCondaYML = "gatkcondaenv.yml"
 final largeResourcesFolder = "src/main/resources/large"
 final buildPrerequisitesMessage = "See https://github.com/broadinstitute/gatk#building for information on how to build GATK."
 
@@ -155,44 +157,30 @@ configurations.all {
         force 'org.broadinstitute:barclay:' + barclayVersion
 
         // make sure we don't pick up an incorrect version of the GATK variant of the google-nio library
-        // via Picard, etc., or pick up the google variant of it
+        // via Picard, etc.
         force googleCloudNioDependency
-        componentSelection {
-            // This feature is incubating, and although it works, when its triggered it doesnt propagate
-            // the rejection message so the build fails saying it can't find google-cloud-nio.
-            withModule('com.google.cloud:google-cloud-nio') {
-                ComponentSelection selection -> selection.reject("The GATK version of this component is required")
-            }
-        }
     }
     all*.exclude group: 'org.slf4j', module: 'slf4j-jdk14' //exclude this to prevent slf4j complaining about to many slf4j bindings
     all*.exclude group: 'com.google.guava', module: 'guava-jdk5'
     all*.exclude group: 'junit', module: 'junit'
 }
 
-
-jacocoTestReport {
-    dependsOn test
-    group = "Reporting"
-    description = "Generate Jacoco coverage reports after running tests."
-    additionalSourceDirs = files(sourceSets.main.allJava.srcDirs)
-
-    reports {
-        xml.enabled = true
-        html.enabled = true
-    }
-}
-
-//NOTE: we ignore contracts for now
-compileJava {
+tasks.withType(JavaCompile) {
   options.compilerArgs = ['-proc:none', '-Xlint:all', '-Werror', '-Xdiags:verbose']
 }
-compileTestJava {
-  options.compilerArgs = ['-proc:none', '-Xlint:all', '-Werror', '-Xdiags:verbose']
+
+sourceSets {
+    testUtils
 }
 
 // Dependency change for including MLLib
 configurations {
+    testUtilsCompile.extendsFrom compile
+    testUtilsRuntime.extendsFrom runtime
+
+    testCompile.extendsFrom testUtilsCompile
+    testRuntime.extendsFrom testUtilsRuntime
+
     compile.exclude module: 'jul-to-slf4j'
     compile.exclude module: 'javax.servlet'
     compile.exclude module: 'servlet-api'
@@ -253,8 +241,14 @@ dependencies {
     // allows us to read from GCS also when testing locally (or on non-Dataproc clusters,
     // should we want to)
     compile 'com.google.cloud.bigdataoss:gcs-connector:1.6.3-hadoop2'
+
     compile 'org.apache.logging.log4j:log4j-api:2.3'
     compile 'org.apache.logging.log4j:log4j-core:2.3'
+    // include the apache commons-logging bridge that matches the log4j version we use so
+    // messages that originate with dependencies that use commons-logging (such as jexl)
+    // are routed to log4j
+    compile 'org.apache.logging.log4j:log4j-jcl:2.3'
+
     compile 'org.apache.commons:commons-lang3:3.5'
     compile 'org.apache.commons:commons-math3:3.5'
     compile 'org.apache.commons:commons-collections4:4.1'
@@ -264,7 +258,6 @@ dependencies {
 
     compile 'it.unimi.dsi:fastutil:7.0.6'
 
-    compile 'com.github.wendykierp:JTransforms:3.1'
     compile 'org.broadinstitute:hdf5-java-bindings:1.1.0-hdf5_2.11.0'
     compile 'org.broadinstitute:gatk-native-bindings:1.0.0'
 
@@ -289,13 +282,8 @@ dependencies {
     }
 
     compile 'org.jgrapht:jgrapht-core:0.9.1'
-    compile 'org.testng:testng:' + testNGVersion //compile instead of testCompile because it is needed for test infrastructure that needs to be packaged
-    compile 'org.apache.hadoop:hadoop-minicluster:' + hadoopVersion
 
-    compile('org.seqdoop:hadoop-bam:' + hadoopBamVersion) {
-        exclude group: 'org.apache.hadoop'
-        exclude module: 'htsjdk'
-    }
+    compile('org.disq-bio:disq:0.1.0')
     compile('org.apache.hadoop:hadoop-client:' + hadoopVersion) // should be a 'provided' dependency
     compile('com.github.jsr203hadoop:jsr203hadoop:1.0.3')
 
@@ -322,7 +310,7 @@ dependencies {
     // Dependency change for including MLLib
     compile('com.esotericsoftware:reflectasm:1.10.0:shaded')
 
-    compile('com.intel.gkl:gkl:0.8.5') {
+    compile('com.intel.gkl:gkl:0.8.6') {
         exclude module: 'htsjdk'
     }
 
@@ -331,6 +319,15 @@ dependencies {
 
     // Required for COSMIC Funcotator data source:
     compile 'org.xerial:sqlite-jdbc:3.20.1'
+    
+    // Required for SV Discovery machine learning
+    compile group: 'biz.k11i', name: 'xgboost-predictor', version: '0.3.0'
+
+    testUtilsCompile sourceSets.main.output
+    testUtilsCompile 'org.testng:testng:' + testNGVersion
+    testUtilsCompile 'org.apache.hadoop:hadoop-minicluster:' + hadoopVersion
+
+    testCompile sourceSets.testUtils.output
 
     testCompile "org.mockito:mockito-core:2.10.0"
     testCompile "com.google.jimfs:jimfs:1.1"
@@ -375,7 +372,6 @@ version = (isRelease ? gitVersion() : gitVersion() + "-SNAPSHOT").replaceAll(".d
 logger.info("build for version:" + version)
 group = 'org.broadinstitute'
 
-
 tasks.withType(Jar) {
     manifest {
         attributes 'Implementation-Title': 'The Genome Analysis Toolkit (GATK)',
@@ -385,89 +381,6 @@ tasks.withType(Jar) {
                 'htsjdk-Version': htsjdkVersion
     }
 }
-
-test {
-    outputs.upToDateWhen { false }  //tests will never be "up to date" so you can always rerun them
-    String TEST_VERBOSITY = "$System.env.TEST_VERBOSITY"
-
-    /**
-     * Valid options for TEST_TYPE are:
-     * cloud, integration, unit  : run one of the three disjoint partitions of the test suite
-     * all                       : run all the tests
-     * anything else             : run the non-cloud tests
-     */
-    String TEST_TYPE = "$System.env.TEST_TYPE"
-
-    useTestNG {
-        if (TEST_TYPE == "cloud") {
-            // run only the cloud tests
-            includeGroups 'cloud', 'bucket'
-        } else if (TEST_TYPE == "integration"){
-            include "**/*IntegrationTest.class"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation"
-        } else if (TEST_TYPE == "unit") {
-            exclude "**/*IntegrationTest.class"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation"
-        } else if (TEST_TYPE == "spark") {
-            includeGroups "spark"
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation"
-        } else if (TEST_TYPE == "python") {
-            includeGroups "python"
-        } else if (TEST_TYPE == "all"){
-            //include everything
-        } else {
-            excludeGroups "cloud", "bucket", "python", "funcotatorValidation"
-        }
-    }
-
-    systemProperty "samjdk.use_async_io_read_samtools", "false"
-    systemProperty "samjdk.use_async_io_write_samtools", "true"
-    systemProperty "samjdk.use_async_io_write_tribble", "false"
-    systemProperty "samjdk.compression_level", "2"
-    systemProperty "gatk.spark.debug", System.getProperty("gatk.spark.debug")
-
-    environment "SPARK_LOCAL_IP","127.0.0.1"
-
-    // set heap size for the test JVM(s)
-    minHeapSize = "1G"
-    maxHeapSize = "4G"
-
-    if (TEST_VERBOSITY == "minimal") {
-        int count = 0
-        // listen to events in the test execution lifecycle
-
-        beforeTest { descriptor ->
-            count++
-            if( count % 10000 == 0) {
-                logger.lifecycle("Finished "+ Integer.toString(count++) + " tests")
-            }
-        }
-    } else {
-        // show standard out and standard error of the test JVM(s) on the console
-        testLogging.showStandardStreams = true
-        beforeTest { descriptor ->
-            logger.lifecycle("Running Test: " + descriptor)
-        }
-
-        // listen to standard out and standard error of the test JVM(s)
-        onOutput { descriptor, event ->
-            logger.lifecycle("Test: " + descriptor + " produced standard out/err: " + event.message )
-        }
-    }
-
-    testLogging {
-        testLogging {
-            events "skipped", "failed"
-            exceptionFormat = "full"
-        }
-        afterSuite { desc, result ->
-            if (!desc.parent) { // will match the outermost suite
-                println "Results: ${result.resultType} (${result.testCount} tests, ${result.successfulTestCount} successes, ${result.failedTestCount} failures, ${result.skippedTestCount} skipped)"
-            }
-        }
-    }
-}
-
 
 task wrapper(type: Wrapper) {
     gradleVersion = '3.1'
@@ -489,6 +402,8 @@ tasks.withType(ShadowJar) {
         resource = 'reference.conf'
     }
 }
+
+apply from: "testsettings.gradle"
 
 shadowJar {
     configurations = [project.configurations.runtime]
@@ -517,8 +432,28 @@ task sparkJar(type: ShadowJar) {
     }
 }
 
-task bundle(type: Zip) {
-    dependsOn shadowJar, sparkJar, 'gatkTabComplete', 'createPythonPackageArchive', 'gatkDoc'
+// A jar that only contains the test classes and resources (to be extracted for testing)
+task shadowTestClassJar(type: ShadowJar){
+    group = "Shadow"
+    from sourceSets.test.output
+    description = "Create a jar that packages the compiled test classes"
+    classifier = "test"
+}
+
+// A minimal jar that only contains the extra dependencies needed for running the tests
+task shadowTestJar(type: ShadowJar){
+    group = "Shadow"
+    description = " A minimal jar that only contains the extra dependencies needed for running the tests that arent packaged in the main shadow jar"
+    from {
+        (project.configurations.testRuntime - project.configurations.runtime ).collect {
+            it.isDirectory() ? it : it.getName().endsWith(".jar") ? zipTree(it) : it
+        }
+    }
+    classifier = "testDependencies"
+}
+
+task collectBundleIntoDir(type: Copy) {
+    dependsOn shadowJar, sparkJar, 'condaEnvironmentDefinition', 'gatkTabComplete', 'gatkDoc'
 
     doFirst {
         assert file("gatk").exists()
@@ -526,10 +461,6 @@ task bundle(type: Zip) {
         assert file("$docBuildDir/tabCompletion/gatk-completion.sh").exists()
         assert file("src/main/resources/org/broadinstitute/hellbender/utils/config/GATKConfig.properties").exists()
     }
-
-    baseName = project.name + "-" + project.version
-    destinationDir file("$buildDir")
-    archiveName baseName + ".zip"
 
     from(shadowJar.archivePath)
     from(sparkJar.archivePath)
@@ -542,12 +473,23 @@ task bundle(type: Zip) {
         rename 'GATKConfig.properties', 'GATKConfig.EXAMPLE.properties'
     }
 
-    from("${buildDir}/${pythonPackageArchiveName}")
-    // When including gatkcondaenv.yml file in the release bundle, strip off the
-    // 'build/' prefix used for the location of the Python package archive.
-    from("scripts/gatkcondaenv.yml", {
-        filter { line -> line.replace("build/${pythonPackageArchiveName}", pythonPackageArchiveName) }
-    })
+    from("$buildDir/$pythonPackageArchiveName")
+    from("$buildDir/$gatkCondaYML")
+    from("scripts/sv", { into("scripts/sv") })
+    from("scripts/cnv_wdl/", { into("scripts/cnv_wdl") })
+    from("scripts/mutect2_wdl/", { into("scripts/mutect2_wdl") })
+    from("scripts/dataproc-cluster-ui", { into("scripts/")})
+    into "$buildDir/bundle-files-collected"
+}
+
+task bundle(type: Zip) {
+    dependsOn collectBundleIntoDir
+
+    baseName = project.name + "-" + project.version
+    destinationDir file("$buildDir")
+    archiveName baseName + ".zip"
+
+    from("$buildDir/bundle-files-collected")
     into(baseName)
 
     doLast {
@@ -555,14 +497,47 @@ task bundle(type: Zip) {
     }
 }
 
-task createPythonPackageArchive(type: Zip) {
+jacocoTestReport {
+    dependsOn test
 
+    group = "Reporting"
+    description = "Generate Jacoco coverage reports after running tests."
+    additionalSourceDirs = files(sourceSets.main.allJava.srcDirs)
+
+    reports {
+        xml.enabled = true
+        html.enabled = true
+    }
+}
+
+task condaStandardEnvironmentDefinition(type: Copy) {
+    from "scripts"
+    into buildDir
+    include gatkCondaTemplate
+    rename { file -> gatkCondaYML }
+    expand(["condaEnvName":"gatk",
+            "condaEnvDescription" : "Conda environment for GATK Python Tools",
+            "tensorFlowDependency" : "tensorflow==$tensorflowVersion"])
+    doLast {
+        logger.lifecycle("Created standard Conda environment yml file: $gatkCondaYML")
+    }
+}
+
+
+// Create GATK conda environment yml file from the conda enc template
+task condaEnvironmentDefinition() {
+    dependsOn 'pythonPackageArchive', 'condaStandardEnvironmentDefinition'
+}
+
+// Create the Python package archive file
+task pythonPackageArchive(type: Zip) {
+    inputs.dir "src/main/python/org/broadinstitute/hellbender/"
+    outputs.file pythonPackageArchiveName
     doFirst {
-        logger.lifecycle("Creating GATK Python package archive...")
         assert file("src/main/python/org/broadinstitute/hellbender/").exists()
     }
 
-    destinationDir file("$buildDir")
+    destinationDir file("${buildDir}")
     archiveName pythonPackageArchiveName
     from("src/main/python/org/broadinstitute/hellbender/")
     into("/")
@@ -570,6 +545,19 @@ task createPythonPackageArchive(type: Zip) {
     doLast {
         logger.lifecycle("Created GATK Python package archive in ${destinationDir}/${archiveName}")
     }
+}
+
+// Creates a standard, local, GATK conda environment, for use by developers during iterative
+// development. Assumes conda or miniconda is already installed.
+//
+// NOTE: This CREATES a local conda environment; but does not *activate* it. The environment must
+// be activated manually in the shell from which GATK will be run.
+//
+task localDevCondaEnv(type: Exec) {
+    dependsOn 'condaEnvironmentDefinition'
+    inputs.file("$buildDir/$pythonPackageArchiveName")
+    workingDir "$buildDir"
+    commandLine "conda", "env", "update", "-f", gatkCondaYML
 }
 
 task javadocJar(type: Jar, dependsOn: javadoc) {
@@ -580,6 +568,11 @@ task javadocJar(type: Jar, dependsOn: javadoc) {
 task sourcesJar(type: Jar) {
     from sourceSets.main.allSource
     classifier = 'sources'
+}
+
+task testUtilsJar(type: Jar){
+    baseName = "$project.name-test-utils"
+    from sourceSets.testUtils.output
 }
 
 tasks.withType(Javadoc) {
@@ -593,6 +586,29 @@ javadoc {
     options.addStringOption('Xdoclint:none', '-quiet')
     source = sourceSets.main.allJava + files(configurations.externalSourceConfiguration.collect { zipTree(it) })
     include '**/*.java'
+}
+
+
+task testUtilsJavadoc(type: Javadoc) {
+    // This is a hack to disable the java 8 default javadoc lint until we fix the html formatting
+    // We only want to do this for the javadoc task, not gatkDoc
+    options.addStringOption('Xdoclint:none', '-quiet')
+    source = sourceSets.testUtils.allJava
+    classpath = sourceSets.testUtils.runtimeClasspath
+    destinationDir = file("$docBuildDir/testUtilsJavadoc")
+    include '**/*.java'
+}
+
+task testUtilsJavadocJar(type: Jar, dependsOn: testUtilsJavadoc){
+    baseName = "$project.name-test-utils"
+    classifier = 'javadoc'
+    from "$docBuildDir/testUtilsJavadoc"
+}
+
+task testUtilsSourcesJar(type: Jar){
+    baseName = "$project.name-test-utils"
+    classifier = 'sources'
+    from sourceSets.testUtils.allSource
 }
 
 // Generate GATK Online Doc
@@ -687,6 +703,8 @@ task gatkTabComplete(type: Javadoc, dependsOn: classes) {
     options.addStringOption("caller-post-arg-max-occurs", "1 1 1 1 1 1 1 1 1 1")
 }
 
+
+
 /**
  *This specifies what artifacts will be built and uploaded when performing a maven upload.
  */
@@ -694,6 +712,9 @@ artifacts {
     archives jar
     archives javadocJar
     archives sourcesJar
+    archives testUtilsJar
+    archives testUtilsJavadocJar
+    archives testUtilsSourcesJar
 
 }
 //remove zip and tar added by the application plugin
@@ -708,6 +729,49 @@ signing {
     sign configurations.archives
 }
 
+def gatkArtifactFilter = { artifact, file -> artifact.name == 'gatk' }
+def gatkTestUtilsArtifactFilter = {artifact, file -> artifact.name == 'gatk-test-utils' }
+def basePomConfiguration = {
+    packaging 'jar'
+    description 'Development on GATK 4'
+    url 'http://github.com/broadinstitute/gatk'
+
+    scm {
+        url 'scm:git@github.com:broadinstitute/gatk.git'
+        connection 'scm:git@github.com:broadinstitute/gatk.git'
+        developerConnection 'scm:git@github.com:broadinstitute/gatk.git'
+    }
+
+    developers {
+        developer {
+            id = "gatkdev"
+            name = "GATK Development Team"
+            email = "gatk-dev-public@broadinstitute.org"
+        }
+    }
+
+    licenses {
+        license {
+            name 'BSD 3-Clause'
+            url 'https://github.com/broadinstitute/gatk/blob/master/LICENSE.TXT'
+            distribution 'repo'
+        }
+    }
+}
+
+install {
+    install {
+        repositories.mavenInstaller {
+            addFilter('gatk', gatkArtifactFilter)
+                    .project(basePomConfiguration)
+                    .project{ name "GATK4"}
+            
+            addFilter('gatk-test-utils', gatkTestUtilsArtifactFilter)
+                    .project(basePomConfiguration)
+                    .project{ name "GATK4 Test Utilities" }
+        }
+    }
+}
 /**
  * Upload a release to sonatype.  You must be an authorized uploader and have your sonatype
  * username and password information in your gradle properties file.  See the readme for more info.
@@ -730,34 +794,14 @@ uploadArchives {
                 authentication(userName: System.env.ARTIFACTORY_USERNAME, password: System.env.ARTIFACTORY_PASSWORD)
             }
 
-            pom.project {
-                name 'GATK4'
-                packaging 'jar'
-                description 'Development on GATK 4'
-                url 'http://github.com/broadinstitute/gatk'
+            addFilter('gatk-test-utils', gatkTestUtilsArtifactFilter)
+                    .project(basePomConfiguration)
+                    .project{ name "GATK4 Test Utilities" }
 
-                scm {
-                    url 'scm:git@github.com:broadinstitute/gatk.git'
-                    connection 'scm:git@github.com:broadinstitute/gatk.git'
-                    developerConnection 'scm:git@github.com:broadinstitute/gatk.git'
-                }
+            addFilter('gatk', gatkArtifactFilter)
+                    .project(basePomConfiguration)
+                    .project{ name "GATK4"}
 
-                developers {
-                    developer {
-                        id = "gatkdev"
-                        name = "GATK Development Team"
-                        email = "gatk-dev-public@broadinstitute.org"
-                    }
-                }
-
-                licenses {
-                    license {
-                        name 'BSD 3-Clause'
-                        url 'https://github.com/broadinstitute/gatk/blob/master/LICENSE.TXT'
-                        distribution 'repo'
-                    }
-                }
-            }
         }
     }
 }

@@ -2,17 +2,18 @@ package org.broadinstitute.hellbender.tools.spark.sv.utils;
 
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.JavaSparkContext;
+import org.apache.spark.api.java.function.Function;
 import org.apache.spark.broadcast.Broadcast;
 import org.broadinstitute.barclay.argparser.Argument;
 import org.broadinstitute.barclay.argparser.BetaFeature;
 import org.broadinstitute.barclay.argparser.CommandLineProgramProperties;
 import org.broadinstitute.barclay.help.DocumentedFeature;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 import org.broadinstitute.hellbender.engine.spark.GATKSparkTool;
 import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.utils.gcs.BucketUtils;
 import org.broadinstitute.hellbender.utils.read.GATKRead;
+import picard.cmdline.programgroups.ReadDataManipulationProgramGroup;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -22,7 +23,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Subsets reads by name
+ * Subsets reads by name (basically a parallel version of "grep -f", or "grep -vf")
  *
  * <p>Reads a file of read (i.e., template) names, and searches a SAM/BAM/CRAM to find names that match.
  * The matching reads are copied to an output file.</p>
@@ -65,8 +66,12 @@ import java.util.stream.Collectors;
 public final class ExtractOriginalAlignmentRecordsByNameSpark extends GATKSparkTool {
     private static final long serialVersionUID = 1L;
 
-    @Argument(doc = "file containing list of read names", fullName = "read-name-file")
+    @Argument(doc = "file containing list of read names", shortName = "f", fullName = "read-name-file")
     private String readNameFile;
+
+    @Argument(doc = "invert the list, i.e. filter out reads whose name appear in the given file",
+            shortName = "v", fullName = "invert-match", optional = true)
+    private Boolean invertFilter = false;
 
     @Argument(doc = "file to write reads to", shortName = StandardArgumentDefinitions.OUTPUT_SHORT_NAME,
             fullName = StandardArgumentDefinitions.OUTPUT_LONG_NAME)
@@ -82,21 +87,29 @@ public final class ExtractOriginalAlignmentRecordsByNameSpark extends GATKSparkT
 
         final Broadcast<Set<String>> namesToLookForBroadcast = ctx.broadcast(parseReadNames());
 
-        final JavaRDD<GATKRead> reads =
-                getUnfilteredReads().filter(read -> namesToLookForBroadcast.getValue().contains(read.getName())).cache();
-        writeReads(ctx, outputSAM, reads);
+        final Function<GATKRead, Boolean> predicate = getGatkReadBooleanFunction(namesToLookForBroadcast, invertFilter);
+
+        final JavaRDD<GATKRead> reads = getUnfilteredReads().filter(predicate).cache();
+        writeReads(ctx, outputSAM, reads, getHeaderForReads());
 
         logger.info("Found " + reads.count() + " alignment records for " +
                     namesToLookForBroadcast.getValue().size() + " unique read names.");
+    }
+
+    private static Function<GATKRead, Boolean> getGatkReadBooleanFunction(final Broadcast<Set<String>> namesToLookForBroadcast,
+                                                                          final boolean invertFilter) {
+        return invertFilter
+                ? read -> !namesToLookForBroadcast.getValue().contains(read.getName())
+                : read -> namesToLookForBroadcast.getValue().contains(read.getName());
     }
 
     private Set<String> parseReadNames() {
 
         try ( final BufferedReader rdr =
                       new BufferedReader(new InputStreamReader(BucketUtils.openFile(readNameFile))) ) {
-            return rdr.lines().map(s -> s.replace("^@", "")
-                                         .replace("/1$", "")
-                                         .replace("/2$", ""))
+            return rdr.lines().map(s -> s.replaceAll("^@", "")
+                                         .replaceAll("/1$", "")
+                                         .replaceAll("/2$", ""))
                     .collect(Collectors.toCollection(HashSet::new));
         } catch ( final IOException ioe ) {
             throw new GATKException("Unable to read names file from " + readNameFile, ioe);

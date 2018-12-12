@@ -2,8 +2,8 @@ package org.broadinstitute.hellbender.tools.walkers.vqsr;
 
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.cmdline.StandardArgumentDefinitions;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
-import org.broadinstitute.hellbender.utils.test.IntegrationTestSpec;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.IntegrationTestSpec;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
@@ -97,6 +97,19 @@ public class CNNScoreVariantsIntegrationTest extends CommandLineProgramTest {
         final IntegrationTestSpec spec = new IntegrationTestSpec(argsBuilder.toString(),
                 Arrays.asList(largeFileTestDir + "VQSR/expected/cnn_1d_chr20_subset_expected.vcf"));
         spec.executeTest("testInference", this);
+    }
+
+    @Test(groups = {"python"})
+    public void testOnContigEdge() throws IOException{
+        final String edgeVcf = toolsTestDir + "walkers/VQSR/variantNearContigEdge.vcf";
+        final ArgumentsBuilder argsBuilder = new ArgumentsBuilder();
+        argsBuilder.addArgument(StandardArgumentDefinitions.VARIANT_LONG_NAME, edgeVcf)
+                .addArgument(StandardArgumentDefinitions.REFERENCE_LONG_NAME, hg19MiniReference)
+                .addArgument("architecture", architecture1D)
+                .addArgument(StandardArgumentDefinitions.ADD_OUTPUT_VCF_COMMANDLINE, "false");
+
+        argsBuilder.addArgument(StandardArgumentDefinitions.OUTPUT_LONG_NAME, largeFileTestDir + "VQSR/expected/chrM.vcf");
+        runCommandLine(argsBuilder);
     }
 
     /**

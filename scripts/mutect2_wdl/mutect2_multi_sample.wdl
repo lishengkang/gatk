@@ -51,19 +51,19 @@ workflow Mutect2_Multi {
 
     # funcotator inputs
     Boolean? run_funcotator
-    String? reference_version
-    String? data_sources_tar_gz
-    String? transcript_selection_mode
-    Array[String]? transcript_selection_list
-    Array[String]? annotation_defaults
-    Array[String]? annotation_overrides
+    String? funco_reference_version
+    File? funco_data_sources_tar_gz
+    String? funco_transcript_selection_mode
+    File? funco_transcript_selection_list
+    Array[String]? funco_annotation_defaults
+    Array[String]? funco_annotation_overrides
 
-    File? gatk_override
 
     # runtime
     String gatk_docker
     String? oncotator_docker
     Int? preemptible_attempts
+    File? gatk_override
 
 	scatter( row in pairs ) {
 	    #      If the condition is true, variables inside the 'if' block retain their values outside the block.
@@ -101,12 +101,13 @@ workflow Mutect2_Multi {
                 sequence_source = sequence_source,
                 default_config_file = default_config_file,
                 run_funcotator = run_funcotator,
-                reference_version = reference_version,
-                data_sources_tar_gz = data_sources_tar_gz,
-                transcript_selection_mode = transcript_selection_mode,
-                transcript_selection_list = transcript_selection_list,
-                annotation_defaults = annotation_defaults,
-                annotation_overrides = annotation_overrides,
+                funco_reference_version = funco_reference_version,
+                funco_data_sources_tar_gz = funco_data_sources_tar_gz,
+                funco_transcript_selection_mode = funco_transcript_selection_mode,
+                funco_transcript_selection_list = funco_transcript_selection_list,
+                funco_annotation_defaults = funco_annotation_defaults,
+                funco_annotation_overrides = funco_annotation_overrides,
+
                 make_bamout = make_bamout,
                 compress_vcfs = compress_vcfs,
                 gatk_override = gatk_override,
@@ -117,8 +118,6 @@ workflow Mutect2_Multi {
     }
 
     output {
-        Array[File] unfiltered_vcf = Mutect2.unfiltered_vcf
-        Array[File] unfiltered_vcf_idx = Mutect2.unfiltered_vcf_index
         Array[File] filtered_vcf = Mutect2.filtered_vcf
         Array[File] filtered_vcf_idx = Mutect2.filtered_vcf_index
         Array[File?] contamination_tables = Mutect2.contamination_table

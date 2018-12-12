@@ -1,15 +1,15 @@
 package org.broadinstitute.hellbender.engine;
 
-import java.nio.file.Path;
-import org.broadinstitute.hellbender.utils.SimpleInterval;
-import org.broadinstitute.hellbender.exceptions.GATKException;
 import org.broadinstitute.hellbender.GATKBaseTest;
+import org.broadinstitute.hellbender.exceptions.GATKException;
+import org.broadinstitute.hellbender.utils.SimpleInterval;
 import org.broadinstitute.hellbender.utils.io.IOUtils;
 import org.testng.Assert;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
+import org.testng.internal.junit.ArrayAsserts;
 
-import java.io.File;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -24,8 +24,8 @@ public final class ReferenceContextUnitTest extends GATKBaseTest {
         // and/or null intervals should behave as empty context objects.
         return new Object[][] {
                 { new ReferenceContext() },
-                { new ReferenceContext(null, null) },
-                { new ReferenceContext(null, new SimpleInterval("1", 1, 1) ) },
+                { new ReferenceContext(null, null, 0, 0) },
+                { new ReferenceContext(null, new SimpleInterval("1", 1, 1), 0, 0 ) },
                 { new ReferenceContext(new ReferenceFileSource(TEST_REFERENCE), null) }
         };
     }
@@ -211,6 +211,80 @@ public final class ReferenceContextUnitTest extends GATKBaseTest {
         }
     }
 
+    @DataProvider
+    private Object[][] provideForTestCopyConstructor() {
+        return new Object[][] {
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("1", 2650, 2650),
+                        0,
+                        0
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("1", 2650, 2650),
+                        3,
+                        5
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("1", 2640, 2650),
+                        0,
+                        0
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("1", 2640, 2650),
+                        3,
+                        5
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("2", 2650, 2650),
+                        3,
+                        5
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("2", 2650, 2650),
+                        0,
+                        0
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("2", 2650, 2660),
+                        3,
+                        5
+                },
+                {
+                        new SimpleInterval("1", 11210, 11220),
+                        new SimpleInterval("2", 2650, 2660),
+                        0,
+                        0
+                },
+        };
+    }
+
+    @Test(dataProvider = "provideForTestCopyConstructor")
+    public void testCopyConstructor(final SimpleInterval originalInterval, final SimpleInterval newInterval, final int leadingBases, final int trailingBases) {
+        try (final ReferenceDataSource reference = new ReferenceFileSource(TEST_REFERENCE)) {
+
+            final ReferenceContext refContext = new ReferenceContext(reference, originalInterval, leadingBases, trailingBases);
+            Assert.assertEquals(refContext.getInterval(), originalInterval, "Set interval is different from expected interval!");
+
+            final ReferenceContext newRefContext = new ReferenceContext(refContext, newInterval);
+            Assert.assertEquals(newRefContext.getInterval(), newInterval, "Set interval is different from expected interval!");
+
+            final SimpleInterval newWindow = newRefContext.getWindow();
+
+            final int newLeadingBases = newInterval.getStart() - newWindow.getStart();
+            final int newTrailingBases = newWindow.getEnd() - newInterval.getEnd();
+
+            Assert.assertEquals(newLeadingBases, leadingBases, "New window leading bases are not the same as old window leading bases!");
+            Assert.assertEquals(newTrailingBases, trailingBases, "New window trailing bases are not the same as old window trailing bases!");
+        }
+    }
+
     private void checkReferenceContextBases( final ReferenceContext refContext, final String expectedBases ) {
 
         final byte[] contextBases = refContext.getBases();
@@ -281,6 +355,28 @@ public final class ReferenceContextUnitTest extends GATKBaseTest {
             SimpleInterval interval = new SimpleInterval("1", 5, 10);
             ReferenceContext refContext = new ReferenceContext(reference, interval);
             refContext.setWindow(windowStartOffset, windowStopOffset);
+        }
+    }
+
+    @DataProvider(name = "SubintervalDataProvider")
+    public Object[][] getSubintervals() {
+        return new Object[][] {
+                // start (1120x):   01234567890
+                // reference bases: CGGTGCTGTGC
+                {"1", 11211, 1, "CGG"},
+                {"1", 11219, 1, "TGC"},
+                {"1", 11217, 2, "CTGTG"}
+        };
+    }
+
+    @Test(dataProvider = "SubintervalDataProvider")
+    public void testGetKmerAround(final String contig, final int start, final int padding, String expectedSubsequence){
+        // the interval of a ReferenceContext object is *in*clusive on both ends
+        try (final ReferenceDataSource reference = new ReferenceFileSource(TEST_REFERENCE)) {
+            final SimpleInterval interval = new SimpleInterval(contig, start, start);
+            final ReferenceContext refContext = new ReferenceContext(reference, interval);
+            final String kmer = refContext.getKmerAround(start, padding);
+            Assert.assertEquals(kmer, expectedSubsequence);
         }
     }
 }

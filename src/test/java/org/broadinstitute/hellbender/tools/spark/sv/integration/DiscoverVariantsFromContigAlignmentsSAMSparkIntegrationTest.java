@@ -3,13 +3,14 @@ package org.broadinstitute.hellbender.tools.spark.sv.integration;
 import org.apache.hadoop.fs.Path;
 import org.broadinstitute.hellbender.CommandLineProgramTest;
 import org.broadinstitute.hellbender.tools.spark.sv.utils.GATKSVVCFConstants;
-import org.broadinstitute.hellbender.utils.test.ArgumentsBuilder;
+import org.broadinstitute.hellbender.testutils.ArgumentsBuilder;
 import org.broadinstitute.hellbender.GATKBaseTest;
-import org.broadinstitute.hellbender.utils.test.MiniClusterUtils;
+import org.broadinstitute.hellbender.testutils.MiniClusterUtils;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -54,7 +55,7 @@ public class DiscoverVariantsFromContigAlignmentsSAMSparkIntegrationTest extends
     }
 
     @Test(dataProvider = "discoverVariantsFromContigAlignmentsSparkIntegrationTest", groups = "sv")
-    public void testDiscoverVariantsRunnableLocal(final DiscoverVariantsFromContigAlignmentsSAMSparkIntegrationTestArgs params) throws Exception {
+    public void testDiscoverVariantsRunnableLocal(final DiscoverVariantsFromContigAlignmentsSAMSparkIntegrationTestArgs params) throws IOException {
 
         final List<String> args = Arrays.asList( new ArgumentsBuilder().add(params.getCommandLine()).getArgsArray() );
         runCommandLine(args);

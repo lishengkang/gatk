@@ -102,7 +102,7 @@ import java.util.*;
  *   --resource dbsnp,known=true,training=false,truth=false,prior=2.0:Homo_sapiens_assembly38.dbsnp138.vcf.gz \
  *   -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
  *   -mode SNP \
- *   --recal-file output.recal \
+ *   -O output.recal \
  *   --tranches-file output.tranches \
  *   --rscript-file output.plots.R
  * </pre>
@@ -119,7 +119,7 @@ import java.util.*;
  *   --resource dbsnp,known=true,training=false,truth=false,prior=2.0:Homo_sapiens_assembly38.dbsnp138.vcf.gz \
  *   -an QD -an MQ -an MQRankSum -an ReadPosRankSum -an FS -an SOR \
  *   -mode SNP \
- *   --recal-file output.AS.recal \
+ *   -O output.AS.recal \
  *   --tranches-file output.AS.tranches \
  *   --rscript-file output.plots.AS.R
  * </pre>
@@ -235,6 +235,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
      * Add truth sensitivity slices through the call set at the given values. The default values are 100.0, 99.9, 99.0, and 90.0
      * which will result in 4 estimated tranches in the final call set: the full set of calls (100% sensitivity at the accessible
      * sites in the truth set), a 99.9% truth sensitivity tranche, along with progressively smaller tranches at 99% and 90%.
+     * Note: You must pass in each tranche as a separate value (e.g. -tranche 100.0 -tranche 99.9).
      */
     @Argument(fullName="truth-sensitivity-tranche",
             shortName="tranche",
@@ -243,7 +244,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
     private List<Double> TS_TRANCHES = new ArrayList<Double>(Arrays.asList(100.0, 99.9, 99.0, 90.0));
 
     /**
-     * For this to work properly, the -ignoreFilter argument should also be applied to the ApplyRecalibration command.
+     * For this to work properly, the --ignore-filter argument should also be applied to the ApplyRecalibration command.
      */
     @Argument(fullName="ignore-filter",
             doc="If specified, the variant recalibrator will also use variants marked as filtered by the specified filter name in the input VCF file",
@@ -292,7 +293,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
      */
     @Argument(fullName="sample-every-Nth-variant",
             shortName = "sample-every",
-            doc="If specified, the variant recalibrator will use (and output) only a subset of variants consisting of every Nth variant where N is specified by this argument; for use with -outputModel -- see argument details",
+            doc="If specified, the variant recalibrator will use (and output) only a subset of variants consisting of every Nth variant where N is specified by this argument; for use with --output-model -- see argument details",
             optional=true)
     @Hidden
     private int sampleMod = 1;
@@ -367,6 +368,9 @@ public class VariantRecalibrator extends MultiVariantWalker {
             doc = "Trust that all the input training sets' unfiltered records contain only polymorphic sites to drastically speed up the computation.",
             optional=true)
     private boolean TRUST_ALL_POLYMORPHIC = false;
+
+    @VisibleForTesting
+    protected List<Integer> annotationOrder = null;
 
     /////////////////////////////
     // Private Member Variables
@@ -446,11 +450,9 @@ public class VariantRecalibrator extends MultiVariantWalker {
             pPMixTable = reportIn.getTable("GoodGaussianPMix");
             final GATKReportTable anMeansTable = reportIn.getTable("AnnotationMeans");
             final GATKReportTable anStDevsTable = reportIn.getTable("AnnotationStdevs");
-            numAnnotations = dataManager.annotationKeys.size();
 
-            if ( numAnnotations != pmmTable.getNumColumns()-1 || numAnnotations != nmmTable.getNumColumns()-1 ) { // -1 because the first column is the gaussian number.
-                throw new CommandLineException( "Annotations specified on the command line do not match annotations in the model report." );
-            }
+            orderAndValidateAnnotations(anMeansTable, dataManager.annotationKeys);
+            numAnnotations = annotationOrder.size();
 
             final Map<String, Double> anMeans = getMapFromVectorTable(anMeansTable);
             final Map<String, Double> anStdDevs = getMapFromVectorTable(anStDevsTable);
@@ -479,6 +481,31 @@ public class VariantRecalibrator extends MultiVariantWalker {
         for ( int iii = 0; iii < REPLICATE * 2; iii++ ) {
             replicate.add(Utils.getRandomGenerator().nextDouble());
         }
+    }
+
+    /**
+     * Order and validate annotations according to the annotations in the serialized model
+     * Annotations on the command line must be the same as those in the model report or this will throw an exception.
+     * Sets the {@code annotationOrder} list to map from command line order to the model report's order.
+     * n^2 because we typically use 7 or less annotations.
+     * @param annotationTable GATKReportTable of annotations read from the serialized model file
+     */
+    protected void orderAndValidateAnnotations(final GATKReportTable annotationTable, final List<String> annotationKeys){
+        annotationOrder = new ArrayList<Integer>(annotationKeys.size());
+
+        for (int i = 0; i < annotationTable.getNumRows(); i++){
+            String serialAnno = (String)annotationTable.get(i, "Annotation");
+            for (int j = 0; j < annotationKeys.size(); j++) {
+                if (serialAnno.equals( annotationKeys.get(j))){
+                    annotationOrder.add(j);
+                }
+            }
+        }
+
+        if(annotationOrder.size() != annotationTable.getNumRows() || annotationOrder.size() != annotationKeys.size()) {
+            throw new CommandLineException( "Annotations specified on the command line do not match annotations in the model report." );
+        }
+
     }
 
     //---------------------------------------------------------------------------------------------------------------
@@ -606,7 +633,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
         for (int i = 1; i <= max_attempts; i++) {
             try {
                 dataManager.setData(reduceSum);
-                dataManager.normalizeData(inputModel == null); // Each data point is now (x - mean) / standard deviation
+                dataManager.normalizeData(inputModel == null, annotationOrder); // Each data point is now (x - mean) / standard deviation
 
                 final GaussianMixtureModel goodModel;
                 final GaussianMixtureModel badModel;
@@ -631,7 +658,7 @@ public class VariantRecalibrator extends MultiVariantWalker {
 
                     if (badModel.failedToConverge || goodModel.failedToConverge) {
                         throw new UserException(
-                                "NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe. Please consider " + (badModel.failedToConverge ? "raising the number of variants used to train the negative model (via --minNumBadVariants 5000, for example)." : "lowering the maximum number of Gaussians allowed for use in the model (via --maxGaussians 4, for example)."));
+                                "NaN LOD value assigned. Clustering with this few variants and these annotations is unsafe. Please consider " + (badModel.failedToConverge ? "raising the number of variants used to train the negative model (via --minimum-bad-variants 5000, for example)." : "lowering the maximum number of Gaussians allowed for use in the model (via --max-gaussians 4, for example)."));
                     }
                 }
 

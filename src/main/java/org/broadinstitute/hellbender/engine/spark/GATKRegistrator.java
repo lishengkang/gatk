@@ -2,12 +2,16 @@ package org.broadinstitute.hellbender.engine.spark;
 
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.serializers.FieldSerializer;
+import com.google.common.collect.ImmutableMap;
 import de.javakaffee.kryoserializers.UnmodifiableCollectionsSerializer;
+import de.javakaffee.kryoserializers.guava.ImmutableMapSerializer;
 import htsjdk.samtools.*;
 import org.apache.spark.serializer.KryoRegistrator;
 import org.bdgenomics.adam.serialization.ADAMKryoRegistrator;
+import org.broadinstitute.hellbender.tools.spark.transforms.markduplicates.MarkDuplicatesSparkUtils;
 import org.broadinstitute.hellbender.utils.read.SAMRecordToGATKReadAdapter;
-import org.broadinstitute.hellbender.utils.read.markduplicates.PairedEnds;
+import org.broadinstitute.hellbender.utils.read.markduplicates.ReadsKey;
+import org.broadinstitute.hellbender.utils.read.markduplicates.sparkrecords.*;
 
 import java.util.Collections;
 
@@ -67,6 +71,10 @@ public class GATKRegistrator implements KryoRegistrator {
 
         kryo.register(Collections.unmodifiableList(Collections.EMPTY_LIST).getClass(), new UnmodifiableCollectionsSerializer());
 
+        kryo.register(ImmutableMap.of().getClass(), new ImmutableMapSerializer());
+        kryo.register(ImmutableMap.of("one","element").getClass(), new ImmutableMapSerializer());
+        kryo.register(ImmutableMap.of("map","with","multiple","elements").getClass(), new ImmutableMapSerializer());
+
         kryo.register(SAMRecordToGATKReadAdapter.class, new SAMRecordToGATKReadAdapterSerializer());
 
         kryo.register(SAMRecord.class, new SAMRecordSerializer());
@@ -77,8 +85,12 @@ public class GATKRegistrator implements KryoRegistrator {
         kryo.register(SAMFileHeader.SortOrder.class);
         kryo.register(SAMProgramRecord.class);
         kryo.register(SAMReadGroupRecord.class);
-
-        //register to avoid writing the full name of this class over and over
-        kryo.register(PairedEnds.class, new FieldSerializer<>(kryo, PairedEnds.class));
-    }
+        kryo.register(EmptyFragment.class, new FieldSerializer(kryo, EmptyFragment.class));
+        kryo.register(Fragment.class, new FieldSerializer(kryo, Fragment.class));
+        kryo.register(Pair.class, new Pair.Serializer());
+        kryo.register(Passthrough.class, new FieldSerializer(kryo, Passthrough.class));
+        kryo.register(MarkDuplicatesSparkUtils.IndexPair.class, new FieldSerializer(kryo, MarkDuplicatesSparkUtils.IndexPair.class));
+        kryo.register(ReadsKey.class, new FieldSerializer(kryo, ReadsKey.class));
+        kryo.register(ReadsKey.KeyForFragment.class, new FieldSerializer(kryo, ReadsKey.KeyForFragment.class));
+        kryo.register(ReadsKey.KeyForPair.class, new FieldSerializer(kryo, ReadsKey.KeyForPair.class)); }
 }
